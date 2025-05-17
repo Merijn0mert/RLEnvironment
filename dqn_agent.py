@@ -10,6 +10,7 @@ from torch import nn
 import yaml
 import flappy_bird_gymnasium
 import matplotlib
+matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 from networkx.generators.random_graphs import newman_watts_strogatz_graph
 from rich.markup import render
@@ -29,7 +30,7 @@ RUNS_DIR = "runs"
 os.makedirs(RUNS_DIR, exist_ok=True)
 
 # 'agg': used to generate plots as images and saves them to a file instead of rendering to screen
-matplotlib.use('Agg')
+
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 device = 'cpu'
@@ -78,6 +79,7 @@ class DQN_agent():
         num_states = env.observation_space.shape[0] # expecting type: box
         num_actions = env.action_space.n #number of possible actionss
         rewards_per_episode = [] #rewards per episode
+        last_graph_update_time = datetime.datetime.now()
 
 
         policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device) #creating policy network
@@ -141,6 +143,7 @@ class DQN_agent():
             #keep track of rewards per episode
             rewards_per_episode.append(episode_reward)
 
+            #save model when new best reward is obtained
             if is_training:
                 if episode_reward > best_reward:
                     log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: New best reward {episode_reward:0.1f} ({(episode_reward-best_reward)*100:.1f}%)"
@@ -151,20 +154,25 @@ class DQN_agent():
                     torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
                     best_reward = episode_reward
 
+                #update graph every x seconds
+                current_time = datetime.datetime.now()
+                if current_time - last_graph_update_time > datetime.timedelta(seconds=10):
+                    self.save_graph(rewards_per_episode, epsilon_history)
+                    last_graph_update_time = current_time
+                    print('saving graph to ', self.GRAPH_FILE)
+
+                #if enough experience collected
+                if len(memory) > self.mini_batch_size:
+                    # sample from memory
+                    mini_batch = memory.sample(self.mini_batch_size)
+                    self.optimize(mini_batch, policy_dqn, target_dqn)
+                    #copy policy network to target network after number of steps
+                    if step_counter > self.network_sync_rate:
+                        target_dqn.load_state_dict(policy_dqn.state_dict())
+                        step_counter = 0
 
             epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
             epsilon_history.append(epsilon)
-
-            #if enough experience collected
-            if len(memory) > self.mini_batch_size:
-                # sample from memory
-                mini_batch = memory.sample(self.mini_batch_size)
-                self.optimize(mini_batch, policy_dqn, target_dqn)
-                #copy policy network to target network after number of steps
-                if step_counter > self.network_sync_rate:
-                    target_dqn.load_state_dict(policy_dqn.state_dict())
-                    step_counter = 0
-
     def save_graph(self, rewards_per_episode, epsilon_history):
         #save plots
         fig = plt.figure(1)
@@ -225,15 +233,27 @@ class DQN_agent():
         self.optimizer.step() #update network parameters
 
 if __name__ == '__main__':
-    #Parse command line inputs
-    parser = argparse.ArgumentParser(description='Train or test model')
-    parser.add_argument('hyperparameters', help='')
-    parser.add_argument('--train', help='Training mode', action='store_true')
-    args = parser.parse_args()
+    import sys
 
-    dql = DQN_agent(hyperparameter_set=args.hyperparameters)
+    if len(sys.argv) > 1:
+        # Parse command line inputs
+        parser = argparse.ArgumentParser(description='Train or test model')
+        parser.add_argument('hyperparameters', help='')
+        parser.add_argument('--train', help='Training mode', action='store_true')
+        args = parser.parse_args()
 
-    if args.train:
-        dql.run(is_training=True)
+        hyperparams = args.hyperparameters
+        is_training = args.train
     else:
-        dql.run(is_training=False)
+        # Default values for running without command-line args
+        hyperparams = "cartpole1"
+        is_training = True
+
+    try:
+        dql = DQN_agent(hyperparameter_set=hyperparams)
+        dql.run(is_training=is_training)
+
+    except KeyboardInterrupt:
+        print('[INFO] Bye bye bye')
+        sys.exit(0)
+
