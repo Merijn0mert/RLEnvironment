@@ -1,259 +1,393 @@
 import datetime
 import gymnasium
-
 import numpy as np
 from collections import deque
-
 import random
 import torch
 from torch import nn
 import yaml
 import flappy_bird_gymnasium
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use('Agg')  # Use non-interactive backend for matplotlib
 from matplotlib import pyplot as plt
 from networkx.generators.random_graphs import newman_watts_strogatz_graph
 from rich.markup import render
 from sympy import false
-from dqn import DQN
-from experience_replay import ReplayMemory
+from dqn import DQN  # Import custom DQN model
+from experience_replay import ReplayMemory  # Import experience replay buffer
 import itertools
 import argparse
-
+from gymnasium.vector import SyncVectorEnv
 import os
 
-
-#for printing date and time
+# Define date format for logging
 DATE_FORMAT = "%m-%d %H:%M:%S"
-#directory for saving runs
+# Directory to save training runs
 RUNS_DIR = "runs"
-os.makedirs(RUNS_DIR, exist_ok=True)
+os.makedirs(RUNS_DIR, exist_ok=True)  # Create directory if it doesn't exist
 
-# 'agg': used to generate plots as images and saves them to a file instead of rendering to screen
-
-
+# Set device to GPU if available, else CPU
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = 'cpu'
+print(torch.cuda.get_device_name())
+print(device)
+
 
 class DQN_agent():
-    #agent uses device made in main
-    def __init__(self, hyperparameter_set):
+    def __init__(self, hyperparameter_set, device):
+        # Load hyperparameters from YAML file
         with open('hyperparameters.yml', 'r') as file:
             all_hyperparameters_sets = yaml.safe_load(file)
             hyperparameters = all_hyperparameters_sets[hyperparameter_set]
 
+        # Assign hyperparameters to class variables
         self.hyperparameter_set = hyperparameter_set
-
-        #hyperparameters
         self.env_id = hyperparameters['env_id']
-        self.learning_rate_a = hyperparameters['learning_rate_a'] #learning rate
-        self.discount_factor_g = hyperparameters['discount_factor_g'] #discount rate
-        self.network_sync_rate = hyperparameters['network_sync_rate']  #number of steps agent takes before syncing policy and target dqn
-        self.replay_memory_size = hyperparameters['replay_memory_size'] #size of replay memory
-        self.mini_batch_size = hyperparameters['mini_batch_size'] #size of training data set from replay memory
-        self.epsilon_init = hyperparameters['epsilon_init'] #1 = 100% random action
-        self.epsilon_decay = hyperparameters['epsilon_decay'] #epsilon decay
-        self.epsilon_min = hyperparameters['epsilon_min'] #minimum epsilon value
-        self.stop_on_reward = hyperparameters['stop_on_reward'] #stop training after reaching this number of rewards
-        self.fc1_nodes = hyperparameters['fc1_nodes'] #how many nodes
-        self.env_make_params = hyperparameters.get('env_make_params', {}) #get optional environment specific parameters
+        self.learning_rate_a = hyperparameters['learning_rate_a']
+        self.discount_factor_g = hyperparameters['discount_factor_g']
+        self.network_sync_rate = hyperparameters['network_sync_rate']
+        self.replay_memory_size = hyperparameters['replay_memory_size']
+        self.mini_batch_size = hyperparameters['mini_batch_size']
+        self.epsilon_init = hyperparameters['epsilon_init']
+        self.epsilon_decay = hyperparameters['epsilon_decay']
+        self.epsilon_min = hyperparameters['epsilon_min']
+        self.stop_on_reward = hyperparameters['stop_on_reward']
+        self.fc1_nodes = hyperparameters['fc1_nodes']
+        self.env_make_params = hyperparameters.get('env_make_params', {})
 
         self.device = device
-       # self.action_set = action_set
-       # self.is_training = True
-      #  self.replay_memory = deque(maxlen=1000000)
 
-        #Neural network
-        self.loss_fn = nn.MSELoss() #NN loss fuction MSE=Mean Squared Error can be swapped
-        self.optimizer = None #NN optimizer, initialize later
+        # Define loss function and optimizer placeholder
+        self.loss_fn = nn.MSELoss()
+        self.optimizer = None
 
-        #path to run
+        # Define file paths for logging, model saving, and graph plotting
         self.LOG_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.log')
         self.MODEL_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.pt')
         self.GRAPH_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.png')
 
-    def run(self, is_training=True, render=True):
-        env = gymnasium.make("CartPole-v1", render_mode="human" if render else None)
-        #env = gymnasium.make("FlappyBird-v0", render_mode="human" if render else None, use_lidar=False)
-        # agent = DQN_agent(device, action_set=env.action_space)
-        num_states = env.observation_space.shape[0] # expecting type: box
-        num_actions = env.action_space.n #number of possible actionss
-        rewards_per_episode = [] #rewards per episode
-        last_graph_update_time = datetime.datetime.now()
+    def run(self, is_training=True, render=False):
+        NUM_ENVS = 16  # Number of parallel environments
 
+        # Function to create a single environment instance
+        def make_env():
+            def _init():
+                return gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
 
-        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device) #creating policy network
+            return _init
+
+        # Create vectorized environments
+        envs = SyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
+        obs, _ = envs.reset()
+
+        num_states = obs.shape[1]  # Number of state features
+        num_actions = envs.single_action_space.n  # Number of possible actions
+        rewards_per_episode = []  # List to store rewards per episode
+        last_graph_update_time = datetime.datetime.now()  # Timestamp for last graph update
+
+        # Initialize policy network
+        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
 
         if is_training:
-            epsilon = self.epsilon_init
-            memory = ReplayMemory(self.replay_memory_size)
-
-            #create target network and make identical to policy
+            epsilon = self.epsilon_init  # Initialize epsilon for exploration
+            memory = ReplayMemory(self.replay_memory_size)  # Initialize replay memory
+            # Initialize target network and synchronize with policy network
             target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
             target_dqn.load_state_dict(policy_dqn.state_dict())
-
-            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a) #policy network optimizer
-
-            epsilon_history = [] #list to keep track of epsilon decay
-
-            step_counter = 0 #track number of steps taken. Used for syncing policy and target network
-
-            best_reward = -9999999 #track best reward
+            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
+            epsilon_history = []  # List to store epsilon values over episodes
+            step_counter = 0  # Counter for steps taken
+            best_reward = -9999999  # Initialize best reward
         else:
-            policy_dqn.load_state_dict(torch.load(self.MODEL_FILE)) #load learned policy
-            policy_dqn.eval() #sswitch model to evaluation mode
+            # Load trained model for evaluation
+            policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
+            policy_dqn.eval()
 
-        #train indefinitely, manually stop the run when satisfied with results
         for episode in itertools.count():
-            state, _ = env.reset()
-            state = torch.tensor(state, dtype=torch.float, device=self.device)
-            print("episode = ", episode)
-            terminated = False
-            episode_reward = 0.0
+            obs, _ = envs.reset()  # Reset environments
+            states = torch.tensor(obs, dtype=torch.float32, device=device)  # Convert observations to tensor
+            dones = [False] * NUM_ENVS  # Initialize done flags
+            episode_rewards = np.zeros(NUM_ENVS)  # Initialize rewards for the episode
 
-            #performs actions until episode terminates or reaches max reward
-            while (not terminated and episode_reward < self.stop_on_reward):
-
-                # select action based on epsilon-greedy
-                if is_training and random.random() < epsilon:
-                    #select random action
-                    action = env.action_space.sample()
-                    action = torch.tensor(action, dtype=torch.int64, device=device)
-                else:
-                    #select best action
-                    with torch.no_grad():
-                        action = policy_dqn(state.unsqueeze(dim=0)).squeeze().argmax()
-
-                # Processing:
-                new_state, reward, terminated, _, info = env.step(action.item())
-                #get reward
-                episode_reward += reward
-
-                #convert new state and reward to tensors on device
-                new_state = torch.tensor(state, dtype=torch.float, device=device)
-                reward = torch.tensor(reward, dtype=torch.float, device=device)
-
-                if is_training:
-                    memory.append((state, action, new_state, reward, terminated)) #save experience into memory
-
-                    step_counter += 1 #increment step counter
-
-                # move to new state
-                state = new_state
-            #keep track of rewards per episode
-            rewards_per_episode.append(episode_reward)
-
-            #save model when new best reward is obtained
+            print("episode =", episode)
             if is_training:
-                if episode_reward > best_reward:
-                    log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: New best reward {episode_reward:0.1f} ({(episode_reward-best_reward)*100:.1f}%)"
-                    print(log_message)
-                    with open(self.LOG_FILE, 'a') as file:
-                        file.write(log_message + '\n')
+                print("epsilon =", epsilon)
 
-                    torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
-                    best_reward = episode_reward
-
-                #update graph every x seconds
-                current_time = datetime.datetime.now()
-                if current_time - last_graph_update_time > datetime.timedelta(seconds=10):
-                    self.save_graph(rewards_per_episode, epsilon_history)
-                    last_graph_update_time = current_time
-                    print('saving graph to ', self.GRAPH_FILE)
-
-                #if enough experience collected
-                if len(memory) > self.mini_batch_size:
-                    # sample from memory
+            while not all(dones):
+                # Perform optimization if enough experiences are available
+                if is_training and len(memory) > self.mini_batch_size:
                     mini_batch = memory.sample(self.mini_batch_size)
                     self.optimize(mini_batch, policy_dqn, target_dqn)
-                    #copy policy network to target network after number of steps
                     if step_counter > self.network_sync_rate:
+                        # Update target network
                         target_dqn.load_state_dict(policy_dqn.state_dict())
                         step_counter = 0
 
-            epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
-            epsilon_history.append(epsilon)
-    def save_graph(self, rewards_per_episode, epsilon_history):
-        #save plots
-        fig = plt.figure(1)
+                # Select actions using epsilon-greedy policy
+                if is_training and random.random() < epsilon:
+                    actions = torch.tensor([envs.single_action_space.sample() for _ in range(NUM_ENVS)],
+                                           dtype=torch.int64, device=device)
+                else:
+                    with torch.no_grad():
+                        actions = policy_dqn(states).argmax(dim=1)
 
-        #plot average rewards (Y-axis) vs episodes (X-axis)
+                # Take actions in the environment
+                next_obs, rewards, terminations, truncations, infos = envs.step(actions.cpu().numpy())
+                next_states = torch.tensor(next_obs, dtype=torch.float32, device=device)
+                rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
+                done_flags = np.logical_or(terminations, truncations)
+
+                # Reward shaping: extra reward for staying between pipes
+                between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (next_states[:, 9] < next_states[:, 5])
+                rewards_tensor += between_pipe_mask.float() * 0.1
+
+                if is_training:
+                    # Store experiences in replay memory
+                    for i in range(NUM_ENVS):
+                        memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
+
+                    step_counter += NUM_ENVS  # Update step counter
+
+                states = next_states  # Update current states
+                episode_rewards += rewards  # Accumulate rewards
+                dones = np.logical_or(dones, done_flags)  # Update done flags
+
+            mean_reward = np.mean(episode_rewards)  # Calculate mean reward for the episode
+            rewards_per_episode.append(mean_reward)  # Store mean reward
+
+            # Save model if performance improves
+            if is_training and mean_reward > best_reward:
+                log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: Episode {episode}: New best reward {mean_reward:0.1f} ({(mean_reward - best_reward) * 100:.1f}%)"
+                print(log_message)
+                with open(self.LOG_FILE, 'a') as file:
+                    file.write(log_message + '\n')
+                torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
+                best_reward = mean_reward
+
+            current_time = datetime.datetime.now()
+            # Update and save training graph periodically
+            if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
+                self.save_graph(rewards_per_episode, epsilon_history)
+                last_graph_update_time = current_time
+                print('saving graph to', self.GRAPH_FILE)
+
+            if is_training:
+                # Decay epsilon
+                epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
+                epsilon_history.append(epsilon)
+
+    def save_graph(self, rewards_per_episode, epsilon_history):
+        fig = plt.figure(1)
         mean_reward = np.zeros(len(rewards_per_episode))
+        # Calculate moving average of rewards
         for x in range(len(mean_reward)):
-            mean_reward[x] = np.mean(rewards_per_episode[max(0, x-99):(x+1)])
-        plt.subplot(121) # plot on a 1 row x 2 col grid
+            mean_reward[x] = np.mean(rewards_per_episode[max(0, x - 99):(x + 1)])
+        plt.subplot(121)
         plt.ylabel("Mean Reward")
         plt.plot(mean_reward)
-
-        #plot epsilon decay (Yaxis) vs episodes (Xaxis)
         plt.subplot(122)
         plt.ylabel("Episode Decay")
         plt.plot(epsilon_history)
-
         plt.subplots_adjust(wspace=1.0, hspace=1.0)
-
-        #save plot
-        fig.savefig(self.GRAPH_FILE)
+        fig.savefig(self.GRAPH_FILE)  # Save the figure
         plt.close()
 
-    #optimize policy network
     def optimize(self, mini_batch, policy_dqn, target_dqn):
-        #transport the list of experiences and seperate each element
+        # Unpack mini-batch
         states, actions, new_states, rewards, terminations = zip(*mini_batch)
-
-        #stack tensors to create batch tensors
-        states = torch.stack(states)
-        actions = torch.stack(actions)
-        new_states = torch.stack(new_states)
-        rewards = torch.stack(rewards)
+        states = torch.stack(states).to(device)
+        actions = torch.stack(actions).to(device)
+        new_states = torch.stack(new_states).to(device)
+        rewards = torch.stack(rewards).to(device)
         terminations = torch.tensor(terminations).float().to(device)
 
+        # Compute target Q-values
         with torch.no_grad():
-            #calculate target Q values
-            target_q = rewards + (1-terminations) * self.discount_factor_g * target_dqn(new_states).max(dim=1)[0]
-            '''
-                target_dqn(new_states)  ==> tensor([[1,2,3],[4,5,6]])
-                    .max(dim=1)         ==> torch.return_types.max(values=tensor([3,6]), indices=tensor([3, 0, 0, 1]))
-                        [0]             ==> tensor([3,6])
-            '''
-
-        #calculate Q values from current policy
-        current_q = policy_dqn(states).gather(dim=1, index=actions.unsqueeze(dim=1)).squeeze()
-        '''
-            policy_dqn(states)  ==> tensor([[1,2,3],[4,5,6]])
-                actions.unsqueeze(dim=1)
-                .gather(1, actions.unsqueeze(dim=1)) ==>
-                .squeeze()                         ==>
-        '''
-        #compute loss for the whole minibatch
+            target_q = rewards + (1 - terminations) * self.discount_factor_g * target_dqn(new_states).max(dim=1)[0]
+        # Compute current Q-values
+        current_q = policy_dqn(states).gather(dim=1, index=actions.unsqueeze(1)).squeeze()
+        # Compute loss
         loss = self.loss_fn(current_q, target_q)
-        #optimize model
-        self.optimizer.zero_grad() #clear gradients
-        loss.backward() #compute gradient
-        self.optimizer.step() #update network parameters
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+    def evaluate(self):
+        import time
+
+        # Create a single environment with rendering
+        env = gymnasium.make("FlappyBird-v0", render_mode="human", **self.env_make_params)
+        obs, _ = env.reset()
+
+        num_states = len(obs)
+        num_actions = env.action_space.n
+
+        # Load trained model
+        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
+        policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
+        policy_dqn.eval()
+
+        for episode in itertools.count():
+            obs, _ = env.reset()
+            done = False
+            total_reward = 0
+            print(f"\n--- Starting Evaluation Episode {episode + 1} ---")
+
+            while not done:
+                state = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+                with torch.no_grad():
+                    action = policy_dqn(state).argmax(dim=1).item()
+
+                obs, reward, terminated, truncated, _ = env.step(action)
+                total_reward += reward
+                done = terminated or truncated
+
+                time.sleep(1 / 60)  # Limit to ~60 FPS
+
+            print(f"Episode {episode + 1} finished with reward: {total_reward}")
+        env.close()
+
+    def continue_training(self, is_training=True, render=False):
+        NUM_ENVS = 16  # Number of parallel environments
+
+        # Function to create a single environment instance
+        def make_env():
+            def _init():
+                return gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
+
+            return _init
+
+        # Create vectorized environments
+        envs = SyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
+        obs, _ = envs.reset()
+
+        num_states = obs.shape[1]  # Number of state features
+        num_actions = envs.single_action_space.n  # Number of possible actions
+        rewards_per_episode = []  # List to store rewards per episode
+        last_graph_update_time = datetime.datetime.now()  # Timestamp for last graph update
+
+        # Initialize policy network
+        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
+        policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
+
+        if is_training:
+            epsilon = self.epsilon_init  # Initialize epsilon for exploration
+            memory = ReplayMemory(self.replay_memory_size)  # Initialize replay memory
+            # Initialize target network and synchronize with policy network
+            target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
+            target_dqn.load_state_dict(policy_dqn.state_dict())
+            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
+            epsilon_history = []  # List to store epsilon values over episodes
+            step_counter = 0  # Counter for steps taken
+            best_reward = -9999999  # Initialize best reward
+        else:
+            # Load trained model for evaluation
+            policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
+            policy_dqn.eval()
+
+        for episode in itertools.count():
+            obs, _ = envs.reset()  # Reset environments
+            states = torch.tensor(obs, dtype=torch.float32, device=device)  # Convert observations to tensor
+            dones = [False] * NUM_ENVS  # Initialize done flags
+            episode_rewards = np.zeros(NUM_ENVS)  # Initialize rewards for the episode
+
+            print("episode =", episode)
+            if is_training:
+                print("epsilon =", epsilon)
+
+            while not all(dones):
+                # Perform optimization if enough experiences are available
+                if is_training and len(memory) > self.mini_batch_size:
+                    mini_batch = memory.sample(self.mini_batch_size)
+                    self.optimize(mini_batch, policy_dqn, target_dqn)
+                    if step_counter > self.network_sync_rate:
+                        # Update target network
+                        target_dqn.load_state_dict(policy_dqn.state_dict())
+                        step_counter = 0
+
+                # Select actions using epsilon-greedy policy
+                if is_training and random.random() < epsilon:
+                    actions = torch.tensor([envs.single_action_space.sample() for _ in range(NUM_ENVS)],
+                                           dtype=torch.int64, device=device)
+                else:
+                    with torch.no_grad():
+                        actions = policy_dqn(states).argmax(dim=1)
+
+                # Take actions in the environment
+                next_obs, rewards, terminations, truncations, infos = envs.step(actions.cpu().numpy())
+                next_states = torch.tensor(next_obs, dtype=torch.float32, device=device)
+                rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
+                done_flags = np.logical_or(terminations, truncations)
+
+                # Reward shaping: extra reward for staying between pipes
+                between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (next_states[:, 9] < next_states[:, 5])
+                rewards_tensor += between_pipe_mask.float() * 0.1
+
+                if is_training:
+                    # Store experiences in replay memory
+                    for i in range(NUM_ENVS):
+                        memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
+
+                    step_counter += NUM_ENVS  # Update step counter
+
+                states = next_states  # Update current states
+                episode_rewards += rewards  # Accumulate rewards
+                dones = np.logical_or(dones, done_flags)  # Update done flags
+
+            mean_reward = np.mean(episode_rewards)  # Calculate mean reward for the episode
+            rewards_per_episode.append(mean_reward)  # Store mean reward
+
+            # Save model if performance improves
+            if is_training and mean_reward > best_reward:
+                log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: Episode {episode}: New best reward {mean_reward:0.1f} ({(mean_reward - best_reward) * 100:.1f}%)"
+                print(log_message)
+                with open(self.LOG_FILE, 'a') as file:
+                    file.write(log_message + '\n')
+                torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
+                best_reward = mean_reward
+
+            current_time = datetime.datetime.now()
+            # Update and save training graph periodically
+            if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
+                self.save_graph(rewards_per_episode, epsilon_history)
+                last_graph_update_time = current_time
+                print('saving graph to', self.GRAPH_FILE)
+
+            if is_training:
+                # Decay epsilon
+                epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
+                epsilon_history.append(epsilon)
 
 if __name__ == '__main__':
     import sys
 
     if len(sys.argv) > 1:
-        # Parse command line inputs
         parser = argparse.ArgumentParser(description='Train or test model')
-        parser.add_argument('hyperparameters', help='')
-        parser.add_argument('--train', help='Training mode', action='store_true')
+        parser.add_argument('hyperparameters', help='Name of the hyperparameter set to use')
+        parser.add_argument('--train', help='Enable training mode', action='store_true')
+        parser.add_argument('--evaluate', help='Run evaluation mode with rendering', action='store_true')
+        parser.add_argument('--continuetrain', help='Run evaluation mode with rendering', action='store_true')
         args = parser.parse_args()
-
         hyperparams = args.hyperparameters
         is_training = args.train
+        is_evaluation = args.evaluate
+        training_continue = args.continuetrain
     else:
-        # Default values for running without command-line args
-        hyperparams = "cartpole1"
+        # Default hyperparameters and training mode
+        hyperparams = "flappybird1"
         is_training = True
 
     try:
-        dql = DQN_agent(hyperparameter_set=hyperparams)
-        dql.run(is_training=is_training)
-
+        if is_training:
+            dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+            dql.run(is_training=is_training)
+        if training_continue:
+            dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+            dql.continue_training(is_training=is_training)
+        if is_evaluation:
+            dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+            dql.evaluate()
     except KeyboardInterrupt:
         print('[INFO] Bye bye bye')
-        sys.exit(0)
+
 

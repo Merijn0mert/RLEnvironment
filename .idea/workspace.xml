@@ -4,9 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ac70779d-f3da-4891-816a-7fb7ef96a772" name="Changes" comment="Added DQN agent with saving runs">
+    <list default="true" id="ac70779d-f3da-4891-816a-7fb7ef96a772" name="Changes" comment="Fixed not saving graph">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dqn.py" beforeDir="false" afterPath="$PROJECT_DIR$/dqn.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dqn_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/dqn_agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hyperparameters.yml" beforeDir="false" afterPath="$PROJECT_DIR$/hyperparameters.yml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -167,7 +169,10 @@
       <workItem from="1747077366852" duration="1299000" />
       <workItem from="1747392037505" duration="1524000" />
       <workItem from="1747394215313" duration="595000" />
-      <workItem from="1747514806079" duration="9531000" />
+      <workItem from="1747514806079" duration="9600000" />
+      <workItem from="1747581221116" duration="8321000" />
+      <workItem from="1747641711738" duration="3191000" />
+      <workItem from="1747645407842" duration="9876000" />
     </task>
     <task id="LOCAL-00001" summary="gitignore">
       <option name="closed" value="true" />
@@ -201,7 +206,15 @@
       <option name="project" value="LOCAL" />
       <updated>1747522252045</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="Fixed not saving graph">
+      <option name="closed" value="true" />
+      <created>1747524516649</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1747524516649</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -222,11 +235,23 @@
     <MESSAGE value="gitignore" />
     <MESSAGE value="Added main and DQN" />
     <MESSAGE value="Added DQN agent with saving runs" />
-    <option name="LAST_COMMIT_MESSAGE" value="Added DQN agent with saving runs" />
+    <MESSAGE value="Fixed not saving graph" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fixed not saving graph" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/.venv/Lib/site-packages/gymnasium/core.py</url>
+          <line>316</line>
+          <option name="timeStamp" value="4" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/RLEnv$agent.coverage" NAME="agent Coverage Results" MODIFIED="1747043525800" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/RLEnv$dqn_agent.coverage" NAME="dqn_agent Coverage Results" MODIFIED="1747524357420" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/RLEnv$dqn_agent.coverage" NAME="dqn_agent Coverage Results" MODIFIED="1747654627711" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/RLEnv$main.coverage" NAME="main Coverage Results" MODIFIED="1747521164496" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/RLEnv$dqn.coverage" NAME="dqn Coverage Results" MODIFIED="1747043611856" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
