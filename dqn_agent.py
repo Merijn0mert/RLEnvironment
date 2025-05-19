@@ -15,11 +15,14 @@ from networkx.generators.random_graphs import newman_watts_strogatz_graph
 from rich.markup import render
 from sympy import false
 from dqn import DQN  # Import custom DQN model
+from scoreoverlaywrapper import ScoreOverlayWrapper
 from experience_replay import ReplayMemory  # Import experience replay buffer
 import itertools
 import argparse
 from gymnasium.vector import SyncVectorEnv
 import os
+from gymnasium.wrappers import RecordVideo  # Import video recording wrapper
+
 
 # Define date format for logging
 DATE_FORMAT = "%m-%d %H:%M:%S"
@@ -212,11 +215,13 @@ class DQN_agent():
         loss.backward()
         self.optimizer.step()
 
-    def evaluate(self):
+    def evaluate(self, episodes=3):
         import time
+        from pathlib import Path
 
         # Create a single environment with rendering
         env = gymnasium.make("FlappyBird-v0", render_mode="human", **self.env_make_params)
+
         obs, _ = env.reset()
 
         num_states = len(obs)
@@ -227,7 +232,7 @@ class DQN_agent():
         policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
         policy_dqn.eval()
 
-        for episode in itertools.count():
+        for episode in range(episodes):
             obs, _ = env.reset()
             done = False
             total_reward = 0
@@ -238,14 +243,60 @@ class DQN_agent():
                 with torch.no_grad():
                     action = policy_dqn(state).argmax(dim=1).item()
 
-                obs, reward, terminated, truncated, _ = env.step(action)
+                obs, reward, terminated, truncated, info = env.step(action)
                 total_reward += reward
+                if "score" in info:
+                    score = info["score"]
                 done = terminated or truncated
 
                 time.sleep(1 / 60)  # Limit to ~60 FPS
 
-            print(f"Episode {episode + 1} finished with reward: {total_reward}")
+            print(f"Episode {episode + 1} finished with reward: {total_reward} Score: {score}")
         env.close()
+
+    def evaluateVideo(self, episodes=3):
+        import time
+        from pathlib import Path
+
+        video_dir = os.path.join("videos", self.hyperparameter_set)
+        Path(video_dir).mkdir(parents=True, exist_ok=True)
+        # Create a single environment with rendering
+        base_env = gymnasium.make("FlappyBird-v0", render_mode="rgb_array", **self.env_make_params)
+        env_with_score = ScoreOverlayWrapper(base_env)
+        env = RecordVideo(env_with_score, video_folder=video_dir, episode_trigger=lambda episode_id: True, name_prefix=f"{self.hyperparameter_set}_eval")
+        obs, _ = env.reset()
+
+        num_states = len(obs)
+        num_actions = env.action_space.n
+
+        # Load trained model
+        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
+        policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
+        policy_dqn.eval()
+
+        for episode in range(episodes):
+            obs, _ = env.reset()
+            done = False
+            total_reward = 0
+            print(f"\n--- Starting Evaluation Episode {episode + 1} ---")
+
+            while not done:
+                state = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+                with torch.no_grad():
+                    action = policy_dqn(state).argmax(dim=1).item()
+
+                obs, reward, terminated, truncated, info = env.step(action)
+                total_reward += reward
+                if "score" in info:
+                    score = info["score"]
+
+                done = terminated or truncated
+
+                time.sleep(1 / 60)  # Limit to ~60 FPS
+
+            print(f"Episode {episode + 1} finished with reward: {total_reward} Score: {score}")
+        env.close()
+        print(f"\nVideos saved in: {video_dir}")
 
     def continue_training(self, is_training=True, render=False):
         NUM_ENVS = 16  # Number of parallel environments
@@ -366,10 +417,13 @@ if __name__ == '__main__':
         parser.add_argument('hyperparameters', help='Name of the hyperparameter set to use')
         parser.add_argument('--train', help='Enable training mode', action='store_true')
         parser.add_argument('--evaluate', help='Run evaluation mode with rendering', action='store_true')
-        parser.add_argument('--continuetrain', help='Run evaluation mode with rendering', action='store_true')
+        parser.add_argument('--save', help='Run evaluation recording mode', action='store_true')
+        parser.add_argument('--continuetrain', help='Continue training mode', action='store_true')
         args = parser.parse_args()
         hyperparams = args.hyperparameters
+
         is_training = args.train
+        is_save = args.save
         is_evaluation = args.evaluate
         training_continue = args.continuetrain
     else:
@@ -384,6 +438,9 @@ if __name__ == '__main__':
         if training_continue:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
             dql.continue_training(is_training=is_training)
+        if is_save:
+            dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+            dql.evaluateVideo()
         if is_evaluation:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
             dql.evaluate()
