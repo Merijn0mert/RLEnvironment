@@ -10,13 +10,14 @@ cartpole1:
   discount_factor_g: 0.99
   stop_on_reward: 100000
   fc1_nodes: 10
+  enable_double_dqn: True
 
 flappybird1:
   env_id: FlappyBird-v0
   learning_rate_a: 0.0005
   discount_factor_g: 0.99
   network_sync_rate: 10
-  replay_memory_size: 100000
+  replay_memory_size: 50000
   mini_batch_size: 64
   epsilon_init: 1 #100% random change decreasing to epsilon_min
   epsilon_decay: 0.99
@@ -25,4 +26,5 @@ flappybird1:
   fc1_nodes: 4096
   env_make_params:
     use_lidar: False
+  enable_double_dqn: True
 

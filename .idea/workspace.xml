@@ -4,9 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ac70779d-f3da-4891-816a-7fb7ef96a772" name="Changes" comment="AI is working 6k episodes trained">
+    <list default="true" id="ac70779d-f3da-4891-816a-7fb7ef96a772" name="Changes" comment="Added checkpoints for continue and training. Fixed error for those">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dqn_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/dqn_agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/experience_replay.py" beforeDir="false" afterPath="$PROJECT_DIR$/experience_replay.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hyperparameters.yml" beforeDir="false" afterPath="$PROJECT_DIR$/hyperparameters.yml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -172,7 +174,8 @@
       <workItem from="1747641711738" duration="3191000" />
       <workItem from="1747645407842" duration="9910000" />
       <workItem from="1747661131799" duration="11451000" />
-      <workItem from="1747728081350" duration="3947000" />
+      <workItem from="1747728081350" duration="13188000" />
+      <workItem from="1747768266629" duration="10776000" />
     </task>
     <task id="LOCAL-00001" summary="gitignore">
       <option name="closed" value="true" />
@@ -230,7 +233,15 @@
       <option name="project" value="LOCAL" />
       <updated>1747692222188</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="Added checkpoints for continue and training. Fixed error for those">
+      <option name="closed" value="true" />
+      <created>1747732288509</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1747732288509</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -254,7 +265,8 @@
     <MESSAGE value="Fixed not saving graph" />
     <MESSAGE value="Added continue training and evaluate. Render 16 instances of flappy bird at the same time" />
     <MESSAGE value="AI is working 6k episodes trained" />
-    <option name="LAST_COMMIT_MESSAGE" value="AI is working 6k episodes trained" />
+    <MESSAGE value="Added checkpoints for continue and training. Fixed error for those" />
+    <option name="LAST_COMMIT_MESSAGE" value="Added checkpoints for continue and training. Fixed error for those" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
