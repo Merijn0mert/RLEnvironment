@@ -68,6 +68,7 @@ class DQN_agent():
         self.LOG_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.log')
         self.MODEL_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.pt')
         self.GRAPH_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.png')
+        self.checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
 
     def run(self, is_training=True, render=False):
         NUM_ENVS = 16  # Number of parallel environments
@@ -99,6 +100,7 @@ class DQN_agent():
             target_dqn.load_state_dict(policy_dqn.state_dict())
             self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
             epsilon_history = []  # List to store epsilon values over episodes
+            episode_counter = 0
             step_counter = 0  # Counter for steps taken
             best_reward = -9999999  # Initialize best reward
         else:
@@ -106,78 +108,129 @@ class DQN_agent():
             policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
             policy_dqn.eval()
 
-        for episode in itertools.count():
-            obs, _ = envs.reset()  # Reset environments
-            states = torch.tensor(obs, dtype=torch.float32, device=device)  # Convert observations to tensor
-            dones = [False] * NUM_ENVS  # Initialize done flags
-            episode_rewards = np.zeros(NUM_ENVS)  # Initialize rewards for the episode
+        try:
+            for episode in itertools.count():
+                obs, _ = envs.reset()  # Reset environments
+                states = torch.tensor(obs, dtype=torch.float32, device=device)  # Convert observations to tensor
+                dones = [False] * NUM_ENVS  # Initialize done flags
+                episode_rewards = np.zeros(NUM_ENVS)  # Initialize rewards for the episode
 
-            print("episode =", episode)
-            if is_training:
-                print("epsilon =", epsilon)
+                print("episode =", episode)
+                episode_counter = episode
+                if is_training:
+                    print("epsilon =", epsilon)
 
-            while not all(dones):
-                # Perform optimization if enough experiences are available
-                if is_training and len(memory) > self.mini_batch_size:
-                    mini_batch = memory.sample(self.mini_batch_size)
-                    self.optimize(mini_batch, policy_dqn, target_dqn)
-                    if step_counter > self.network_sync_rate:
-                        # Update target network
-                        target_dqn.load_state_dict(policy_dqn.state_dict())
-                        step_counter = 0
+                while not all(dones):
+                    # Perform optimization if enough experiences are available
+                    if is_training and len(memory) > self.mini_batch_size:
+                        mini_batch = memory.sample(self.mini_batch_size)
+                        self.optimize(mini_batch, policy_dqn, target_dqn)
+                        if step_counter > self.network_sync_rate:
+                            # Update target network
+                            target_dqn.load_state_dict(policy_dqn.state_dict())
+                            step_counter = 0
 
-                # Select actions using epsilon-greedy policy
-                if is_training and random.random() < epsilon:
-                    actions = torch.tensor([envs.single_action_space.sample() for _ in range(NUM_ENVS)],
-                                           dtype=torch.int64, device=device)
-                else:
-                    with torch.no_grad():
-                        actions = policy_dqn(states).argmax(dim=1)
+                    # Select actions using epsilon-greedy policy
+                    if is_training and random.random() < epsilon:
+                        actions = torch.tensor([envs.single_action_space.sample() for _ in range(NUM_ENVS)],
+                                               dtype=torch.int64, device=device)
+                    else:
+                        with torch.no_grad():
+                            actions = policy_dqn(states).argmax(dim=1)
 
-                # Take actions in the environment
-                next_obs, rewards, terminations, truncations, infos = envs.step(actions.cpu().numpy())
-                next_states = torch.tensor(next_obs, dtype=torch.float32, device=device)
-                rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
-                done_flags = np.logical_or(terminations, truncations)
+                    # Take actions in the environment
+                    next_obs, rewards, terminations, truncations, infos = envs.step(actions.cpu().numpy())
+                    next_states = torch.tensor(next_obs, dtype=torch.float32, device=device)
+                    rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
+                    done_flags = np.logical_or(terminations, truncations)
 
-                # Reward shaping: extra reward for staying between pipes
-                between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (next_states[:, 9] < next_states[:, 5])
-                rewards_tensor += between_pipe_mask.float() * 0.1
+                    # Reward shaping: extra reward for staying between pipes
+                    between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (next_states[:, 9] < next_states[:, 5])
+                    rewards_tensor += between_pipe_mask.float() * 0.1
+
+                    if is_training:
+                        # Store experiences in replay memory
+                        for i in range(NUM_ENVS):
+                            memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
+
+                        step_counter += NUM_ENVS  # Update step counter
+
+                    states = next_states  # Update current states
+                    episode_rewards += rewards  # Accumulate rewards
+                    dones = np.logical_or(dones, done_flags)  # Update done flags
+
+                mean_reward = np.mean(episode_rewards)  # Calculate mean reward for the episode
+                rewards_per_episode.append(mean_reward)  # Store mean reward
+
+                # Save model if performance improves
+                if is_training and mean_reward > best_reward:
+                    log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: Episode {episode}: New best reward {mean_reward:0.1f} ({(mean_reward - best_reward) * 100:.1f}%)"
+                    print(log_message)
+                    with open(self.LOG_FILE, 'a') as file:
+                        file.write(log_message + '\n')
+                    torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
+                    best_reward = mean_reward
+
+                current_time = datetime.datetime.now()
+                # Update and save training graph periodically
+                if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
+                    self.save_graph(rewards_per_episode, epsilon_history)
+                    last_graph_update_time = current_time
+                    print('saving graph to', self.GRAPH_FILE)
 
                 if is_training:
-                    # Store experiences in replay memory
-                    for i in range(NUM_ENVS):
-                        memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
+                    # Decay epsilon
+                    epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
+                    epsilon_history.append(epsilon)
 
-                    step_counter += NUM_ENVS  # Update step counter
+                    # Save training checkpoint
+                    checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
+                    if is_training and episode % 10 == 0:
+                        torch.save({
+                            "policy_net": policy_dqn.state_dict(),
+                            "target_net": target_dqn.state_dict(),
+                            "optimizer": self.optimizer.state_dict(),
+                            "replay_memory_data": list(memory.memory),  # <- serialize as list
+                            "epsilon": epsilon,
+                            "episode": episode + 1,
+                            "rewards_per_episode": rewards_per_episode,
+                            "epsilon_history": epsilon_history,
+                            "best_reward": best_reward,
+                            "step_counter": step_counter,
+                        }, checkpoint_path)
+                        print(f"Checkpoint saved at episode {episode}")
+        except KeyboardInterrupt:
+            # Save checkpoint
+            if is_training and episode % 10 == 0:  # Save every 10 episodes
+                torch.save({
+                    "policy_net": policy_dqn.state_dict(),
+                    "target_net": target_dqn.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
+                    "replay_memory_data": list(memory.memory),  # <- serialize as list
+                    "epsilon": epsilon,
+                    "episode": episode + 1,
+                    "rewards_per_episode": rewards_per_episode,
+                    "epsilon_history": epsilon_history,
+                    "best_reward": best_reward,
+                    "step_counter": step_counter,
+                }, checkpoint_path)
+                print(f"Checkpoint saved at episode {episode}")
 
-                states = next_states  # Update current states
-                episode_rewards += rewards  # Accumulate rewards
-                dones = np.logical_or(dones, done_flags)  # Update done flags
-
-            mean_reward = np.mean(episode_rewards)  # Calculate mean reward for the episode
-            rewards_per_episode.append(mean_reward)  # Store mean reward
-
-            # Save model if performance improves
-            if is_training and mean_reward > best_reward:
-                log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: Episode {episode}: New best reward {mean_reward:0.1f} ({(mean_reward - best_reward) * 100:.1f}%)"
-                print(log_message)
-                with open(self.LOG_FILE, 'a') as file:
-                    file.write(log_message + '\n')
-                torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
-                best_reward = mean_reward
-
-            current_time = datetime.datetime.now()
-            # Update and save training graph periodically
-            if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
-                self.save_graph(rewards_per_episode, epsilon_history)
-                last_graph_update_time = current_time
-                print('saving graph to', self.GRAPH_FILE)
-
-            if is_training:
-                # Decay epsilon
-                epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
-                epsilon_history.append(epsilon)
+        except KeyboardInterrupt:
+            print("\n[INFO] Training interrupted. Saving checkpoint before exit...")
+            torch.save({
+                "policy_net": policy_dqn.state_dict(),
+                "target_net": target_dqn.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+                "replay_memory_data": list(memory.memory),
+                "epsilon": epsilon,
+                "episode": episode,
+                "rewards_per_episode": rewards_per_episode,
+                "epsilon_history": epsilon_history,
+                "best_reward": best_reward,
+                "step_counter": step_counter,
+            }, checkpoint_path)
+            print(f"Checkpoint saved at episode {episode}. Exiting gracefully.")
 
     def save_graph(self, rewards_per_episode, epsilon_history):
         fig = plt.figure(1)
@@ -249,7 +302,7 @@ class DQN_agent():
                     score = info["score"]
                 done = terminated or truncated
 
-                time.sleep(1 / 60)  # Limit to ~60 FPS
+                time.sleep(1 / 200)  # Limit to ~200 FPS
 
             print(f"Episode {episode + 1} finished with reward: {total_reward} Score: {score}")
         env.close()
@@ -301,7 +354,6 @@ class DQN_agent():
     def continue_training(self, is_training=True, render=False):
         NUM_ENVS = 16  # Number of parallel environments
 
-        # Function to create a single environment instance
         def make_env():
             def _init():
                 return gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
@@ -312,102 +364,140 @@ class DQN_agent():
         envs = SyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
         obs, _ = envs.reset()
 
-        num_states = obs.shape[1]  # Number of state features
-        num_actions = envs.single_action_space.n  # Number of possible actions
-        rewards_per_episode = []  # List to store rewards per episode
-        last_graph_update_time = datetime.datetime.now()  # Timestamp for last graph update
+        num_states = obs.shape[1]
+        num_actions = envs.single_action_space.n
+        last_graph_update_time = datetime.datetime.now()
 
-        # Initialize policy network
+        # Load checkpoint
+        checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        # Restore training variables
+        memory_data = checkpoint["replay_memory_data"]
+        epsilon = checkpoint["epsilon"]
+        start_episode = checkpoint["episode"]
+        rewards_per_episode = checkpoint["rewards_per_episode"]
+        epsilon_history = checkpoint["epsilon_history"]
+        best_reward = checkpoint["best_reward"]
+        step_counter = checkpoint["step_counter"]
+        memory = ReplayMemory(self.replay_memory_size)
+        memory.memory = memory_data
+        # Recreate ReplayMemory object and load its content
+
+        # Initialize networks
         policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
-        policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
+        target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
+        policy_dqn.load_state_dict(checkpoint["policy_net"])
+        target_dqn.load_state_dict(checkpoint["target_net"])
 
-        if is_training:
-            epsilon = self.epsilon_init  # Initialize epsilon for exploration
-            memory = ReplayMemory(self.replay_memory_size)  # Initialize replay memory
-            # Initialize target network and synchronize with policy network
-            target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
-            target_dqn.load_state_dict(policy_dqn.state_dict())
-            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
-            epsilon_history = []  # List to store epsilon values over episodes
-            step_counter = 0  # Counter for steps taken
-            best_reward = -9999999  # Initialize best reward
-        else:
-            # Load trained model for evaluation
-            policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
-            policy_dqn.eval()
+        # Restore optimizer
+        self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
+        self.optimizer.load_state_dict(checkpoint["optimizer"])
 
-        for episode in itertools.count():
-            obs, _ = envs.reset()  # Reset environments
-            states = torch.tensor(obs, dtype=torch.float32, device=device)  # Convert observations to tensor
-            dones = [False] * NUM_ENVS  # Initialize done flags
-            episode_rewards = np.zeros(NUM_ENVS)  # Initialize rewards for the episode
+        try:
+            for episode in itertools.count(start=start_episode):
+                obs, _ = envs.reset()
+                states = torch.tensor(obs, dtype=torch.float32, device=self.device)
+                dones = [False] * NUM_ENVS
+                episode_rewards = np.zeros(NUM_ENVS)
 
-            print("episode =", episode)
-            if is_training:
-                print("epsilon =", epsilon)
-
-            while not all(dones):
-                # Perform optimization if enough experiences are available
-                if is_training and len(memory) > self.mini_batch_size:
-                    mini_batch = memory.sample(self.mini_batch_size)
-                    self.optimize(mini_batch, policy_dqn, target_dqn)
-                    if step_counter > self.network_sync_rate:
-                        # Update target network
-                        target_dqn.load_state_dict(policy_dqn.state_dict())
-                        step_counter = 0
-
-                # Select actions using epsilon-greedy policy
-                if is_training and random.random() < epsilon:
-                    actions = torch.tensor([envs.single_action_space.sample() for _ in range(NUM_ENVS)],
-                                           dtype=torch.int64, device=device)
-                else:
-                    with torch.no_grad():
-                        actions = policy_dqn(states).argmax(dim=1)
-
-                # Take actions in the environment
-                next_obs, rewards, terminations, truncations, infos = envs.step(actions.cpu().numpy())
-                next_states = torch.tensor(next_obs, dtype=torch.float32, device=device)
-                rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
-                done_flags = np.logical_or(terminations, truncations)
-
-                # Reward shaping: extra reward for staying between pipes
-                between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (next_states[:, 9] < next_states[:, 5])
-                rewards_tensor += between_pipe_mask.float() * 0.1
-
+                print("episode =", episode)
                 if is_training:
-                    # Store experiences in replay memory
-                    for i in range(NUM_ENVS):
-                        memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
+                    print("epsilon =", epsilon)
 
-                    step_counter += NUM_ENVS  # Update step counter
+                while not all(dones):
+                    # Train if memory is sufficient
+                    if is_training and len(memory) > self.mini_batch_size:
+                        mini_batch = memory.sample(self.mini_batch_size)
+                        self.optimize(mini_batch, policy_dqn, target_dqn)
+                        if step_counter > self.network_sync_rate:
+                            target_dqn.load_state_dict(policy_dqn.state_dict())
+                            step_counter = 0
 
-                states = next_states  # Update current states
-                episode_rewards += rewards  # Accumulate rewards
-                dones = np.logical_or(dones, done_flags)  # Update done flags
+                    # Epsilon-greedy action selection
+                    if is_training and random.random() < epsilon:
+                        actions = torch.tensor(
+                            [envs.single_action_space.sample() for _ in range(NUM_ENVS)],
+                            dtype=torch.int64, device=self.device
+                        )
+                    else:
+                        with torch.no_grad():
+                            actions = policy_dqn(states).argmax(dim=1)
 
-            mean_reward = np.mean(episode_rewards)  # Calculate mean reward for the episode
-            rewards_per_episode.append(mean_reward)  # Store mean reward
+                    # Step environment
+                    next_obs, rewards, terminations, truncations, infos = envs.step(actions.cpu().numpy())
+                    next_states = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
+                    rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=self.device)
+                    done_flags = np.logical_or(terminations, truncations)
 
-            # Save model if performance improves
-            if is_training and mean_reward > best_reward:
-                log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: Episode {episode}: New best reward {mean_reward:0.1f} ({(mean_reward - best_reward) * 100:.1f}%)"
-                print(log_message)
-                with open(self.LOG_FILE, 'a') as file:
-                    file.write(log_message + '\n')
-                torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
-                best_reward = mean_reward
+                    # Optional reward shaping
+                    between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (next_states[:, 9] < next_states[:, 5])
+                    rewards_tensor += between_pipe_mask.float() * 0.1
 
-            current_time = datetime.datetime.now()
-            # Update and save training graph periodically
-            if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
-                self.save_graph(rewards_per_episode, epsilon_history)
-                last_graph_update_time = current_time
-                print('saving graph to', self.GRAPH_FILE)
+                    if is_training:
+                        for i in range(NUM_ENVS):
+                            memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
+                        step_counter += NUM_ENVS
 
-            if is_training:
-                # Decay epsilon
-                epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
-                epsilon_history.append(epsilon)
+                    states = next_states
+                    episode_rewards += rewards
+                    dones = np.logical_or(dones, done_flags)
+
+                mean_reward = np.mean(episode_rewards)
+                rewards_per_episode.append(mean_reward)
+
+                # Save best model
+                if is_training and mean_reward > best_reward:
+                    log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: Episode {episode}: New best reward {mean_reward:0.1f} ({(mean_reward - best_reward) * 100:.1f}%)"
+                    print(log_message)
+                    with open(self.LOG_FILE, 'a') as file:
+                        file.write(log_message + '\n')
+                    torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
+                    best_reward = mean_reward
+
+                # Save graph periodically
+                current_time = datetime.datetime.now()
+                if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
+                    self.save_graph(rewards_per_episode, epsilon_history)
+                    last_graph_update_time = current_time
+                    print('saving graph to', self.GRAPH_FILE)
+
+                # Epsilon decay
+                if is_training:
+                    epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
+                    epsilon_history.append(epsilon)
+
+                # Save checkpoint
+                if is_training and episode % 10 == 0:  # Save every 10 episodes
+                    torch.save({
+                        "policy_net": policy_dqn.state_dict(),
+                        "target_net": target_dqn.state_dict(),
+                        "optimizer": self.optimizer.state_dict(),
+                        "replay_memory_data": list(memory.memory),  # <- serialize as list
+                        "epsilon": epsilon,
+                        "episode": episode + 1,
+                        "rewards_per_episode": rewards_per_episode,
+                        "epsilon_history": epsilon_history,
+                        "best_reward": best_reward,
+                        "step_counter": step_counter,
+                    }, checkpoint_path)
+                    print(f"Checkpoint saved at episode {episode}")
+
+        except KeyboardInterrupt:
+            print("\n[INFO] Training interrupted. Saving checkpoint before exit...")
+            torch.save({
+                "policy_net": policy_dqn.state_dict(),
+                "target_net": target_dqn.state_dict(),
+                "optimizer": self.optimizer.state_dict(),
+                "replay_memory_data": list(memory.memory),
+                "epsilon": epsilon,
+                "episode": episode,
+                "rewards_per_episode": rewards_per_episode,
+                "epsilon_history": epsilon_history,
+                "best_reward": best_reward,
+                "step_counter": step_counter,
+            }, checkpoint_path)
+            print(f"Checkpoint saved at episode {episode}. Exiting gracefully.")
+
 
 if __name__ == '__main__':
     import sys
@@ -437,7 +527,7 @@ if __name__ == '__main__':
             dql.run(is_training=is_training)
         if training_continue:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
-            dql.continue_training(is_training=is_training)
+            dql.continue_training(is_training=True)
         if is_save:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
             dql.evaluateVideo()

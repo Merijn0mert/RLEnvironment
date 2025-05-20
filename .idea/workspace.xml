@@ -4,8 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ac70779d-f3da-4891-816a-7fb7ef96a772" name="Changes" comment="Added continue training and evaluate. Render 16 instances of flappy bird at the same time">
-      <change afterPath="$PROJECT_DIR$/scoreoverlaywrapper.py" afterDir="false" />
+    <list default="true" id="ac70779d-f3da-4891-816a-7fb7ef96a772" name="Changes" comment="AI is working 6k episodes trained">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dqn_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/dqn_agent.py" afterDir="false" />
     </list>
@@ -172,7 +171,8 @@
       <workItem from="1747581221116" duration="8321000" />
       <workItem from="1747641711738" duration="3191000" />
       <workItem from="1747645407842" duration="9910000" />
-      <workItem from="1747661131799" duration="10752000" />
+      <workItem from="1747661131799" duration="11451000" />
+      <workItem from="1747728081350" duration="3947000" />
     </task>
     <task id="LOCAL-00001" summary="gitignore">
       <option name="closed" value="true" />
@@ -222,7 +222,15 @@
       <option name="project" value="LOCAL" />
       <updated>1747655905071</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="AI is working 6k episodes trained">
+      <option name="closed" value="true" />
+      <created>1747692222188</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1747692222188</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -245,7 +253,8 @@
     <MESSAGE value="Added DQN agent with saving runs" />
     <MESSAGE value="Fixed not saving graph" />
     <MESSAGE value="Added continue training and evaluate. Render 16 instances of flappy bird at the same time" />
-    <option name="LAST_COMMIT_MESSAGE" value="Added continue training and evaluate. Render 16 instances of flappy bird at the same time" />
+    <MESSAGE value="AI is working 6k episodes trained" />
+    <option name="LAST_COMMIT_MESSAGE" value="AI is working 6k episodes trained" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
