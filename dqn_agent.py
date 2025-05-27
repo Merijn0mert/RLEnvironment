@@ -1,15 +1,21 @@
 import datetime
+#from operator import truedi
 import gymnasium
 import numpy as np
-from collections import deque
+#from collections import deque
 import random
 import torch
-from tqdm import tqdm
+#from tqdm import tqdm
 import joblib
 from torch import nn
 import yaml
 import flappy_bird_gymnasium
 import matplotlib
+
+import checkpointHandler
+import data_visuals
+
+import dataVisuals
 
 matplotlib.use('Agg')  # Use non-interactive backend for matplotlib
 from matplotlib import pyplot as plt
@@ -19,6 +25,7 @@ from sympy import false
 from dqn import DQN  # Import custom DQN model
 from scoreoverlaywrapper import ScoreOverlayWrapper
 from experience_replay import ReplayMemory  # Import experience replay buffer
+from dataVisuals import DataVisuals
 import itertools
 import argparse
 from gymnasium.vector import SyncVectorEnv
@@ -67,6 +74,9 @@ class DQN_agent():
         # Define loss function and optimizer placeholder
         self.loss_fn = nn.MSELoss()
         self.optimizer = None
+        #self.data_visuals = DataVisuals(self.hyperparameter_set)
+        #dv = data_visuals.DataVisuals(self.hyperparameter_set)
+
 
         # Define file paths for logging, model saving, and graph plotting
         self.LOG_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.log')
@@ -74,9 +84,119 @@ class DQN_agent():
         self.GRAPH_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.png')
         self.checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
 
-    def run(self, is_training=True, render=False):
-        NUM_ENVS = 16
+    def run(self, is_training=True, render=False, continue_training=False):
 
+        NUM_ENVS = 16  # Number of parallel environments
+        dv = dataVisuals.DataVisuals(self.hyperparameter_set)
+        cp = checkpointHandler.checkpointer(self.hyperparameter_set)
+
+        def make_env():
+            def _init():
+                return gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
+
+            return _init
+
+        envs = SyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
+        obs, _ = envs.reset()
+
+        num_states = obs.shape[1]
+        num_actions = envs.single_action_space.n
+        last_graph_update_time = datetime.datetime.now()
+        (best_reward, checkpoint_path, epsilon, epsilon_history, memory,
+         policy_dqn, replay_memory_path, rewards_per_episode,
+         start_episode, step_counter, target_dqn, self.optimizer) = cp.loadCheckpoint(continue_training, num_actions, num_states, self.device)
+
+        try:
+            for episode in itertools.count(start=start_episode):
+                obs, _ = envs.reset()
+                states = torch.tensor(obs, dtype=torch.float32, device=self.device)
+                dones = [False] * NUM_ENVS
+                episode_rewards = np.zeros(NUM_ENVS)
+
+                print("episode =", episode)
+                if is_training:
+                    print("epsilon =", epsilon)
+
+                while not all(dones):
+                    if is_training and len(memory) > self.mini_batch_size:
+                        mini_batch = memory.sample(self.mini_batch_size)
+                        self.optimize(mini_batch, policy_dqn, target_dqn)
+                        if step_counter > self.network_sync_rate:
+                            target_dqn.load_state_dict(policy_dqn.state_dict())
+                            step_counter = 0
+
+                    if is_training and random.random() < epsilon:
+                        actions = torch.tensor(
+                            [envs.single_action_space.sample() for _ in range(NUM_ENVS)],
+                            dtype=torch.int64, device=self.device
+                        )
+                    else:
+                        with torch.no_grad():
+                            actions = policy_dqn(states).argmax(dim=1)
+
+                    next_obs, rewards, terminations, truncations, info = envs.step(actions.cpu().numpy())
+                    next_states = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
+                    rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=self.device)
+                    done_flags = np.logical_or(terminations, truncations)
+
+                    between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (
+                            next_states[:, 9] < next_states[:, 5])
+                    rewards_tensor += between_pipe_mask.float() * 0.1
+
+                    if is_training:
+                        for i in range(NUM_ENVS):
+                            memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
+                        step_counter += NUM_ENVS
+
+                    states = next_states
+                    episode_rewards += rewards
+                    dones = np.logical_or(dones, done_flags)
+
+                mean_reward = np.mean(episode_rewards)
+                rewards_per_episode.append(mean_reward)
+
+                # Log score from best-performing env
+                best_env_index = int(np.argmax(episode_rewards))
+                episode_score = None
+                if isinstance(info, list) and best_env_index < len(info):
+                    best_info = info[best_env_index]
+                    if isinstance(best_info, dict) and "score" in best_info:
+                        episode_score = best_info["score"]
+
+                if is_training and mean_reward > best_reward:
+                    log_message = (
+                        f"{datetime.datetime.now().strftime(DATE_FORMAT)}: "
+                        f"Episode {episode}: "
+                        f"New best reward {mean_reward:0.1f} "
+                        f"({(mean_reward - best_reward) * 100:.1f}%)"
+                    )
+                    if episode_score is not None:
+                        log_message += f" | Best Env Score: {episode_score}"
+
+                    print(log_message)
+                    with open(self.LOG_FILE, 'a') as file:
+                        file.write(log_message + '\n')
+
+                    torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
+                    best_reward = mean_reward
+
+                current_time = datetime.datetime.now()
+                if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
+                    dv.save_graph(rewards_per_episode, epsilon_history)
+                    last_graph_update_time = current_time
+                    print('saving graph to', self.GRAPH_FILE)
+
+                if is_training:
+                    epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
+                    epsilon_history.append(epsilon)
+
+        except KeyboardInterrupt:
+            cp.saveCheckpoint(best_reward, checkpoint_path, episode, epsilon, epsilon_history, memory, policy_dqn,
+                                replay_memory_path, rewards_per_episode, step_counter, target_dqn)
+            dv.save_graph(rewards_per_episode, epsilon_history)
+        #Merge Continue and run
+        '''NUM_ENVS = 16
+        dv = data_visuals.DataVisuals(self.hyperparameter_set)
         def make_env():
             def _init():
                 return gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
@@ -170,11 +290,13 @@ class DQN_agent():
                 rewards_per_episode.append(mean_reward)
 
                 if is_training and mean_reward > best_reward:
-                    self.saveToLog(best_reward, episode, mean_reward, policy_dqn)
+                    dv.saveToLog(best_reward, episode, mean_reward, policy_dqn)
+                    #data_visuals.saveToLog()
+                    best_reward = mean_reward
 
                 current_time = datetime.datetime.now()
                 if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
-                    self.save_graph(rewards_per_episode, epsilon_history)
+                    dv.save_graph(rewards_per_episode, epsilon_history)
                     last_graph_update_time = current_time
                     print('saving graph to', self.GRAPH_FILE)
 
@@ -185,32 +307,55 @@ class DQN_agent():
         except KeyboardInterrupt:
 
             self.saveCheckpoint(best_reward, checkpoint_path, episode, epsilon, epsilon_history, memory, policy_dqn,
-                                replay_memory_path, rewards_per_episode, step_counter, target_dqn)
+                                replay_memory_path, rewards_per_episode, step_counter, target_dqn)'''
 
-    def saveToLog(self, best_reward, episode, mean_reward, policy_dqn):
-        log_message = f"{datetime.datetime.now().strftime(DATE_FORMAT)}: Episode {episode}: New best reward {mean_reward:0.1f} ({(mean_reward - best_reward) * 100:.1f}%)"
-        print(log_message)
-        with open(self.LOG_FILE, 'a') as file:
-            file.write(log_message + '\n')
-        torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
-        best_reward = mean_reward
-        return best_reward
+    def loadCheckpoint(self, continue_training, num_actions, num_states):
+        checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
+        if continue_training:
 
-    def save_graph(self, rewards_per_episode, epsilon_history):
-        fig = plt.figure(1)
-        mean_reward = np.zeros(len(rewards_per_episode))
-        # Calculate moving average of rewards
-        for x in range(len(mean_reward)):
-            mean_reward[x] = np.mean(rewards_per_episode[max(0, x - 99):(x + 1)])
-        plt.subplot(121)
-        plt.ylabel("Mean Reward")
-        plt.plot(mean_reward)
-        plt.subplot(122)
-        plt.ylabel("Episode Decay")
-        plt.plot(epsilon_history)
-        plt.subplots_adjust(wspace=1.0, hspace=1.0)
-        fig.savefig(self.GRAPH_FILE)  # Save the figure
-        plt.close()
+            checkpoint = torch.load(checkpoint_path, weights_only=False)
+
+            replay_memory_path = checkpoint_path + ".memory"
+            memory = ReplayMemory(self.replay_memory_size)
+
+            if os.path.exists(replay_memory_path):
+                memory.load_all(replay_memory_path)
+                print(f"[INFO] Loaded replay memory from {replay_memory_path}")
+            else:
+                print("[WARNING] Replay memory file not found, starting with empty replay memory.")
+
+            epsilon = checkpoint["epsilon"]
+            start_episode = checkpoint["episode"]
+            rewards_per_episode = checkpoint["rewards_per_episode"]
+            epsilon_history = checkpoint["epsilon_history"]
+            best_reward = checkpoint["best_reward"]
+            step_counter = checkpoint["step_counter"]
+
+            policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
+            target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
+            policy_dqn.load_state_dict(checkpoint["policy_net"])
+            target_dqn.load_state_dict(checkpoint["target_net"])
+
+            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+        else:
+            start_episode = 0
+
+            # memory_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_replay_memory.joblib")
+            # Path to separate replay memory file
+            replay_memory_path = checkpoint_path + ".memory"
+            memory = ReplayMemory(self.replay_memory_size)
+            epsilon = self.epsilon_init
+            epsilon_history = []
+            rewards_per_episode = []
+            episode_counter = 0
+            step_counter = 0
+            best_reward = -9999999
+
+            policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
+            target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
+            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
+        return best_reward, checkpoint_path, epsilon, epsilon_history, memory, policy_dqn, replay_memory_path, rewards_per_episode, start_episode, step_counter, target_dqn
 
     def optimize(self, mini_batch, policy_dqn, target_dqn):
         # Unpack mini-batch
@@ -383,7 +528,6 @@ class DQN_agent():
                     if isinstance(best_info, dict) and "score" in best_info:
                         episode_score = best_info["score"]
 
-                print('mean_reward =', mean_reward, 'best_reward =', best_reward)
                 if is_training and mean_reward > best_reward:
                     log_message = (
                         f"{datetime.datetime.now().strftime(DATE_FORMAT)}: "
@@ -459,14 +603,17 @@ if __name__ == '__main__':
         # Default hyperparameters and training mode
         hyperparams = "flappybird1"
         is_training = True
+        dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+        dql.run(is_training=is_training, continue_training=True)
 
     try:
         if is_training:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
-            dql.run(is_training=is_training)
+            dql.run(is_training=True, continue_training=False)
         if training_continue:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
-            dql.continue_training(is_training=True)
+            dql.run(is_training=True, continue_training=True)
+            #dql.continue_training(is_training=True)
         if is_save:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
             dql.evaluateVideo()
