@@ -12,9 +12,7 @@ import yaml
 import flappy_bird_gymnasium
 import matplotlib
 import checkpointHandler
-
 import dataVisuals
-
 matplotlib.use('Agg')  # Use non-interactive backend for matplotlib
 from matplotlib import pyplot as plt
 from networkx.generators.random_graphs import newman_watts_strogatz_graph
@@ -192,168 +190,7 @@ class DQN_agent():
             cp.saveCheckpoint(best_reward, checkpoint_path, episode, epsilon, epsilon_history, memory, policy_dqn,
                                 replay_memory_path, rewards_per_episode, step_counter, target_dqn)
             dv.save_graph(rewards_per_episode, epsilon_history)
-        #Merge Continue and run
-        '''NUM_ENVS = 16
-        dv = data_visuals.DataVisuals(self.hyperparameter_set)
-        def make_env():
-            def _init():
-                return gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
 
-            return _init
-
-        envs = SyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
-        obs, _ = envs.reset()
-
-        num_states = obs.shape[1]
-        num_actions = envs.single_action_space.n
-
-        rewards_per_episode = []
-        last_graph_update_time = datetime.datetime.now()
-
-        checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
-        #memory_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_replay_memory.joblib")
-        # Path to separate replay memory file
-        replay_memory_path = checkpoint_path + ".memory"
-        memory = ReplayMemory(self.replay_memory_size)
-
-        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
-
-        if is_training:
-            epsilon = self.epsilon_init
-
-            memory = ReplayMemory(self.replay_memory_size)
-            # Load replay memory if file exists
-
-            target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
-            target_dqn.load_state_dict(policy_dqn.state_dict())
-
-            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
-
-            epsilon_history = []
-            episode_counter = 0
-            step_counter = 0
-            best_reward = -9999999
-        else:
-            policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
-            policy_dqn.eval()
-
-        try:
-            for episode in itertools.count():
-                obs, _ = envs.reset()
-                states = torch.tensor(obs, dtype=torch.float32, device=device)
-                dones = [False] * NUM_ENVS
-                episode_rewards = np.zeros(NUM_ENVS)
-
-                print("episode =", episode)
-                episode_counter = episode
-
-                if is_training:
-                    print("epsilon =", epsilon)
-
-                while not all(dones):
-                    if is_training and len(memory) > self.mini_batch_size:
-                        mini_batch = memory.sample(self.mini_batch_size)
-                        self.optimize(mini_batch, policy_dqn, target_dqn)
-                        if step_counter > self.network_sync_rate:
-                            target_dqn.load_state_dict(policy_dqn.state_dict())
-                            step_counter = 0
-
-                    if is_training and random.random() < epsilon:
-                        actions = torch.tensor([envs.single_action_space.sample() for _ in range(NUM_ENVS)],
-                                               dtype=torch.int64, device=device)
-                    else:
-                        with torch.no_grad():
-                            actions = policy_dqn(states).argmax(dim=1)
-
-                    next_obs, rewards, terminations, truncations, infos = envs.step(actions.cpu().numpy())
-                    next_states = torch.tensor(next_obs, dtype=torch.float32, device=device)
-                    rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
-                    done_flags = np.logical_or(terminations, truncations)
-
-                    between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (
-                                next_states[:, 9] < next_states[:, 5])
-                    rewards_tensor += between_pipe_mask.float() * 0.1
-
-                    if is_training:
-                        for i in range(NUM_ENVS):
-                            memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
-
-                        step_counter += NUM_ENVS
-
-                    states = next_states
-                    episode_rewards += rewards
-                    dones = np.logical_or(dones, done_flags)
-
-                mean_reward = np.mean(episode_rewards)
-                rewards_per_episode.append(mean_reward)
-
-                if is_training and mean_reward > best_reward:
-                    dv.saveToLog(best_reward, episode, mean_reward, policy_dqn)
-                    #data_visuals.saveToLog()
-                    best_reward = mean_reward
-
-                current_time = datetime.datetime.now()
-                if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
-                    dv.save_graph(rewards_per_episode, epsilon_history)
-                    last_graph_update_time = current_time
-                    print('saving graph to', self.GRAPH_FILE)
-
-                if is_training:
-                    epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
-                    epsilon_history.append(epsilon)
-
-        except KeyboardInterrupt:
-
-            self.saveCheckpoint(best_reward, checkpoint_path, episode, epsilon, epsilon_history, memory, policy_dqn,
-                                replay_memory_path, rewards_per_episode, step_counter, target_dqn)'''
-
-    def loadCheckpoint(self, continue_training, num_actions, num_states):
-        checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
-        if continue_training:
-
-            checkpoint = torch.load(checkpoint_path, weights_only=False)
-
-            replay_memory_path = checkpoint_path + ".memory"
-            memory = ReplayMemory(self.replay_memory_size)
-
-            if os.path.exists(replay_memory_path):
-                memory.load_all(replay_memory_path)
-                print(f"[INFO] Loaded replay memory from {replay_memory_path}")
-            else:
-                print("[WARNING] Replay memory file not found, starting with empty replay memory.")
-
-            epsilon = checkpoint["epsilon"]
-            start_episode = checkpoint["episode"]
-            rewards_per_episode = checkpoint["rewards_per_episode"]
-            epsilon_history = checkpoint["epsilon_history"]
-            best_reward = checkpoint["best_reward"]
-            step_counter = checkpoint["step_counter"]
-
-            policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
-            target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
-            policy_dqn.load_state_dict(checkpoint["policy_net"])
-            target_dqn.load_state_dict(checkpoint["target_net"])
-
-            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
-            self.optimizer.load_state_dict(checkpoint["optimizer"])
-        else:
-            start_episode = 0
-
-            # memory_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_replay_memory.joblib")
-            # Path to separate replay memory file
-            replay_memory_path = checkpoint_path + ".memory"
-            memory = ReplayMemory(self.replay_memory_size)
-            epsilon = self.epsilon_init
-            epsilon_history = []
-            rewards_per_episode = []
-            episode_counter = 0
-            step_counter = 0
-            best_reward = -9999999
-
-            policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
-            target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
-            self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
-        return best_reward, checkpoint_path, epsilon, epsilon_history, memory, policy_dqn, replay_memory_path, rewards_per_episode, start_episode, step_counter, target_dqn
 
     def optimize(self, mini_batch, policy_dqn, target_dqn):
         # Unpack mini-batch
@@ -406,7 +243,7 @@ class DQN_agent():
         policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
         policy_dqn.eval()
         for episode in range(episodes):
-            obs, _ = env.reset()
+            env.reset()
             done = False
             total_reward = 0
             print(f"\n--- Starting Evaluation Episode {episode + 1} ---")
@@ -425,159 +262,6 @@ class DQN_agent():
                 time.sleep(1 / 200)  # Limit to ~200 FPS
 
             print(f"Episode {episode + 1} finished with reward: {total_reward} Score: {score}")
-
-    def continue_training(self, is_training=True, render=False):
-        NUM_ENVS = 16  # Number of parallel environments
-
-        def make_env():
-            def _init():
-                return gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
-
-            return _init
-
-        envs = SyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
-        obs, _ = envs.reset()
-
-        num_states = obs.shape[1]
-        num_actions = envs.single_action_space.n
-        last_graph_update_time = datetime.datetime.now()
-
-        checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
-        checkpoint = torch.load(checkpoint_path, weights_only=False)
-
-        replay_memory_path = checkpoint_path + ".memory"
-        memory = ReplayMemory(self.replay_memory_size)
-
-        if os.path.exists(replay_memory_path):
-            memory.load_all(replay_memory_path)
-            print(f"[INFO] Loaded replay memory from {replay_memory_path}")
-        else:
-            print("[WARNING] Replay memory file not found, starting with empty replay memory.")
-
-        epsilon = checkpoint["epsilon"]
-        start_episode = checkpoint["episode"]
-        rewards_per_episode = checkpoint["rewards_per_episode"]
-        epsilon_history = checkpoint["epsilon_history"]
-        best_reward = checkpoint["best_reward"]
-        step_counter = checkpoint["step_counter"]
-
-        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
-        target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
-        policy_dqn.load_state_dict(checkpoint["policy_net"])
-        target_dqn.load_state_dict(checkpoint["target_net"])
-
-        self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
-        self.optimizer.load_state_dict(checkpoint["optimizer"])
-
-        try:
-            for episode in itertools.count(start=start_episode):
-                obs, _ = envs.reset()
-                states = torch.tensor(obs, dtype=torch.float32, device=self.device)
-                dones = [False] * NUM_ENVS
-                episode_rewards = np.zeros(NUM_ENVS)
-
-                print("episode =", episode)
-                if is_training:
-                    print("epsilon =", epsilon)
-
-                while not all(dones):
-                    if is_training and len(memory) > self.mini_batch_size:
-                        mini_batch = memory.sample(self.mini_batch_size)
-                        self.optimize(mini_batch, policy_dqn, target_dqn)
-                        if step_counter > self.network_sync_rate:
-                            target_dqn.load_state_dict(policy_dqn.state_dict())
-                            step_counter = 0
-
-                    if is_training and random.random() < epsilon:
-                        actions = torch.tensor(
-                            [envs.single_action_space.sample() for _ in range(NUM_ENVS)],
-                            dtype=torch.int64, device=self.device
-                        )
-                    else:
-                        with torch.no_grad():
-                            actions = policy_dqn(states).argmax(dim=1)
-
-                    next_obs, rewards, terminations, truncations, info = envs.step(actions.cpu().numpy())
-                    next_states = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
-                    rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=self.device)
-                    done_flags = np.logical_or(terminations, truncations)
-
-                    between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (
-                            next_states[:, 9] < next_states[:, 5])
-                    rewards_tensor += between_pipe_mask.float() * 0.1
-
-                    if is_training:
-                        for i in range(NUM_ENVS):
-                            memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
-                        step_counter += NUM_ENVS
-
-                    states = next_states
-                    episode_rewards += rewards
-                    dones = np.logical_or(dones, done_flags)
-
-                mean_reward = np.mean(episode_rewards)
-                rewards_per_episode.append(mean_reward)
-
-                # Log score from best-performing env
-                best_env_index = int(np.argmax(episode_rewards))
-                episode_score = None
-                if isinstance(info, list) and best_env_index < len(info):
-                    best_info = info[best_env_index]
-                    if isinstance(best_info, dict) and "score" in best_info:
-                        episode_score = best_info["score"]
-
-                if is_training and mean_reward > best_reward:
-                    log_message = (
-                        f"{datetime.datetime.now().strftime(DATE_FORMAT)}: "
-                        f"Episode {episode}: "
-                        f"New best reward {mean_reward:0.1f} "
-                        f"({(mean_reward - best_reward) * 100:.1f}%)"
-                    )
-                    if episode_score is not None:
-                        log_message += f" | Best Env Score: {episode_score}"
-
-                    print(log_message)
-                    with open(self.LOG_FILE, 'a') as file:
-                        file.write(log_message + '\n')
-
-                    torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
-                    best_reward = mean_reward
-
-                current_time = datetime.datetime.now()
-                if is_training and (current_time - last_graph_update_time > datetime.timedelta(seconds=10)):
-                    self.save_graph(rewards_per_episode, epsilon_history)
-                    last_graph_update_time = current_time
-                    print('saving graph to', self.GRAPH_FILE)
-
-                if is_training:
-                    epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
-                    epsilon_history.append(epsilon)
-
-        except KeyboardInterrupt:
-            self.saveCheckpoint(best_reward, checkpoint_path, episode, epsilon, epsilon_history, memory, policy_dqn,
-                                replay_memory_path, rewards_per_episode, step_counter, target_dqn
-            )
-
-    def saveCheckpoint(self, best_reward, checkpoint_path, episode, epsilon, epsilon_history, memory, policy_dqn,
-                       replay_memory_path, rewards_per_episode, step_counter, target_dqn):
-        print("\n[INFO] Training interrupted. Saving checkpoint before exit...")
-        # Save replay memory efficiently with joblib
-        print(f"[INFO] Saving replay memory at {datetime.datetime.now()}...")
-        memory.save_all(replay_memory_path)
-        # Save checkpoint normally with torch for model & other info
-        torch.save({
-            "policy_net": policy_dqn.state_dict(),
-            "target_net": target_dqn.state_dict(),
-            "optimizer": self.optimizer.state_dict(),
-            "replay_memory_data": [],  # Keep empty to reduce checkpoint size
-            "epsilon": epsilon,
-            "episode": episode,
-            "rewards_per_episode": rewards_per_episode,
-            "epsilon_history": epsilon_history,
-            "best_reward": best_reward,
-            "step_counter": step_counter,
-        }, checkpoint_path)
-        print(f"Checkpoint saved at time :{datetime.datetime.now()} and episode: {episode}. Exiting gracefully.")
 
 
 if __name__ == '__main__':
@@ -611,7 +295,6 @@ if __name__ == '__main__':
         if training_continue:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
             dql.run(is_training=True, continue_training=True)
-            #dql.continue_training(is_training=True)
         if is_save:
             dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
             dql.evaluateVideo()
