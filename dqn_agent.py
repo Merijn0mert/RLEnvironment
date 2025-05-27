@@ -11,9 +11,7 @@ from torch import nn
 import yaml
 import flappy_bird_gymnasium
 import matplotlib
-
 import checkpointHandler
-import data_visuals
 
 import dataVisuals
 
