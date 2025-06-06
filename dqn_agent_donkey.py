@@ -19,17 +19,20 @@ from matplotlib import pyplot as plt
 from networkx.generators.random_graphs import newman_watts_strogatz_graph
 from rich.markup import render
 from sympy import false
-from dqn import DQN  # Import custom DQN model
+from dqn_donkey import DQN_donkey  # Import custom DQN model
 from scoreoverlaywrapper import ScoreOverlayWrapper
 from experience_replay import ReplayMemory  # Import experience replay buffer
 from dataVisuals import DataVisuals
 import itertools
 import argparse
 from gymnasium.vector import SyncVectorEnv
+from gymnasium.vector import AsyncVectorEnv
 import os
 from gymnasium.wrappers import RecordVideo  # Import video recording wrapper
 import time
+import torchvision.transforms as T
 from pathlib import Path
+
 
 # Define date format for logging
 DATE_FORMAT = "%m-%d %H:%M:%S"
@@ -43,7 +46,7 @@ print(torch.cuda.get_device_name())
 print(device)
 
 
-class DQN_agent():
+class DQN_agent_donkey():
     def __init__(self, hyperparameter_set, device):
         # Load hyperparameters from YAML file
         with open('hyperparameters.yml', 'r') as file:
@@ -83,29 +86,34 @@ class DQN_agent():
 
     def run(self, is_training=True, render=False, continue_training=False):
 
-        NUM_ENVS = 16  # Number of parallel environments
+        NUM_ENVS = 2  # Number of parallel environments
         dv = dataVisuals.DataVisuals(self.hyperparameter_set)
         cp = checkpointHandler.checkpointer(self.hyperparameter_set)
 
         def make_env():
             def _init():
-                return gymnasium.make(self.env_id, **self.env_make_params)
+                return gymnasium.make(self.env_id)
 
-
+                # **self.env_make_params
                 #gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
 
             return _init
 
-        envs = SyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
+        #envs = SyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
+        envs = AsyncVectorEnv([make_env() for _ in range(NUM_ENVS)])
+
         obs, _ = envs.reset()
 
         num_states = obs.shape[1]
+
         num_actions = envs.single_action_space.n
         last_graph_update_time = datetime.datetime.now()
         (best_reward, checkpoint_path, epsilon, epsilon_history, memory,
          policy_dqn, replay_memory_path, rewards_per_episode,
          start_episode, step_counter, target_dqn, self.optimizer) = cp.loadCheckpoint(continue_training, num_actions, num_states, self.device)
+        policy_dqn = DQN_donkey(num_actions).to(device)
 
+        target_dqn = DQN_donkey(num_actions).to(device)
         try:
             for episode in itertools.count(start=start_episode):
                 obs, _ = envs.reset()
@@ -139,15 +147,23 @@ class DQN_agent():
                     rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=self.device)
                     done_flags = np.logical_or(terminations, truncations)
 
-
-
                     between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (
-                           next_states[:, 9] < next_states[:, 5])
-                    rewards_tensor += between_pipe_mask.float() * 0.1
+                                next_states[:, 9] < next_states[:, 5])
+
+                    # between_pipe_mask = (next_states[:, 4] < next_states[:, 9]) & (
+                    #        next_states[:, 9] < next_states[:, 5])
+                    #rewards_tensor += between_pipe_mask.float() * 0.1
 
                     if is_training:
                         for i in range(NUM_ENVS):
-                            memory.append((states[i], actions[i], next_states[i], rewards_tensor[i], done_flags[i]))
+                            memory.append((
+                                states[i].detach().cpu(),
+                                actions[i].detach().cpu(),
+                                next_states[i].detach().cpu(),
+                                rewards_tensor[i].detach().cpu(),
+                                bool(done_flags[i])
+                            ))
+
                         step_counter += NUM_ENVS
 
                     states = next_states
@@ -225,7 +241,7 @@ class DQN_agent():
 
     def evaluate(self, episodes=11):
         # Create a single environment with rendering
-        env = gymnasium.make(self.env_id, render_mode="human", **self.env_make_params)
+        env = gymnasium.make(self.env_id, render_mode="human")
         self.evaluateProcess(env, episodes)
         env.close()
 
@@ -241,20 +257,19 @@ class DQN_agent():
         print(f"\nVideos saved in: {video_dir}")
 
     def evaluateProcess(self, env, episodes):
-        print(f"Loaded model from {self.MODEL_FILE}")
-        num_states = env.observation_space.shape[0]
+
+        obs, _ = env.reset()
+        num_states = len(obs)
         num_actions = env.action_space.n
-
-        policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(self.device)
-        checkpoint = torch.load(self.MODEL_FILE, map_location=self.device)
-        policy_dqn.load_state_dict(checkpoint)
+        # Load trained model
+        policy_dqn = DQN_donkey(num_actions).to(device)
+        policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
         policy_dqn.eval()
-
         for episode in range(episodes):
-            obs, _ = env.reset()  # <-- Update obs here!
+            obs, _ = env.reset()
+            print(f"Episode {episode + 1} reset, initial obs shape: {obs.shape if hasattr(obs, 'shape') else 'unknown'}")
             done = False
             total_reward = 0
-            score = 0  # Initialize score to avoid possible undefined usage
             print(f"\n--- Starting Evaluation Episode {episode + 1} ---")
 
             while not done:
@@ -268,7 +283,7 @@ class DQN_agent():
                     score = info["score"]
                 done = terminated or truncated
 
-                time.sleep(1 / 200)
+                time.sleep(1 / 200)  # Limit to ~200 FPS
 
             print(f"Episode {episode + 1} finished with reward: {total_reward} Score: {score}")
 
@@ -292,23 +307,23 @@ if __name__ == '__main__':
         training_continue = args.continuetrain
     else:
         # Default hyperparameters and training mode
-        hyperparams = "flappybird1"
+        hyperparams = "donkeykong1"
         is_training = True
-        dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+        dql = DQN_agent_donkey(hyperparameter_set=hyperparams, device=device)
         dql.run(is_training=is_training, continue_training=True)
 
     try:
         if is_training:
-            dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+            dql = DQN_agent_donkey(hyperparameter_set=hyperparams, device=device)
             dql.run(is_training=True, continue_training=False)
         if training_continue:
-            dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+            dql = DQN_agent_donkey(hyperparameter_set=hyperparams, device=device)
             dql.run(is_training=True, continue_training=True)
         if is_save:
-            dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+            dql = DQN_agent_donkey(hyperparameter_set=hyperparams, device=device)
             dql.evaluateVideo()
         if is_evaluation:
-            dql = DQN_agent(hyperparameter_set=hyperparams, device=device)
+            dql = DQN_agent_donkey(hyperparameter_set=hyperparams, device=device)
             dql.evaluate()
     except KeyboardInterrupt:
         print('[INFO] Bye bye bye')

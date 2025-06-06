@@ -41,13 +41,10 @@ class DQN(nn.Module):
             a = F.relu(self.fc_advantages(x))
             A = self.advantages(a)
 
-            Q = V + a - torch.mean(A, dim=1, keepdim=True)
+            Q = V + A - A.mean(dim=1, keepdim=True)  # FIXED here
         else:
             Q = self.output(x)
         return Q
-
-
-
 
 
 if __name__ == '__main__':

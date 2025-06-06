@@ -41,23 +41,31 @@ class checkpointer:
 
     def loadCheckpoint(self, continue_training, num_actions, num_states, device):
         checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
-        checkpoint = torch.load(checkpoint_path, weights_only=False)
         replay_memory_path = checkpoint_path + ".memory"
         memory = ReplayMemory(self.replay_memory_size)
         policy_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
         target_dqn = DQN(num_states, num_actions, self.fc1_nodes).to(device)
 
-        if not continue_training:
-            best_reward, epsilon, epsilon_history, rewards_per_episode, start_episode, step_counter = self.dqnVariables(
-                checkpoint, continue_training)
+        if not continue_training or not os.path.exists(checkpoint_path):
+            print("[INFO] Starting fresh training.")
+            best_reward = float("-inf")
+            epsilon = self.epsilon_init
+            epsilon_history = []
+            rewards_per_episode = []
+            start_episode = 0
+            step_counter = 0
             self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
 
         else:
+            checkpoint = torch.load(checkpoint_path, weights_only=False)
+
             if os.path.exists(replay_memory_path):
-                memory.load_all(replay_memory_path)
+                memory.load_all(replay_memory_path, device=device)
+
                 print(f"[INFO] Loaded replay memory from {replay_memory_path}")
             else:
                 print("[WARNING] Replay memory file not found, starting with empty replay memory.")
+
             best_reward, epsilon, epsilon_history, rewards_per_episode, start_episode, step_counter = self.dqnVariables(
                 checkpoint, continue_training)
             policy_dqn.load_state_dict(checkpoint["policy_net"])
