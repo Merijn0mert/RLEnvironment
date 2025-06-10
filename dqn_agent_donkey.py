@@ -42,6 +42,7 @@ os.makedirs(RUNS_DIR, exist_ok=True)  # Create directory if it doesn't exist
 
 # Set device to GPU if available, else CPU
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+torch.cuda.empty_cache()
 print(torch.cuda.get_device_name())
 print(device)
 
@@ -104,16 +105,16 @@ class DQN_agent_donkey():
 
         obs, _ = envs.reset()
 
-        num_states = obs.shape[1]
+        num_states = np.prod(obs.shape[1:])
 
         num_actions = envs.single_action_space.n
         last_graph_update_time = datetime.datetime.now()
         (best_reward, checkpoint_path, epsilon, epsilon_history, memory,
          policy_dqn, replay_memory_path, rewards_per_episode,
          start_episode, step_counter, target_dqn, self.optimizer) = cp.loadCheckpoint(continue_training, num_actions, num_states, self.device)
-        policy_dqn = DQN_donkey(num_actions).to(device)
+        policy_dqn = DQN_donkey(num_states, num_actions).to(device)
+        target_dqn = DQN_donkey(num_states, num_actions).to(device)
 
-        target_dqn = DQN_donkey(num_actions).to(device)
         try:
             for episode in itertools.count(start=start_episode):
                 obs, _ = envs.reset()
@@ -213,26 +214,33 @@ class DQN_agent_donkey():
                                 replay_memory_path, rewards_per_episode, step_counter, target_dqn)
             dv.save_graph(rewards_per_episode, epsilon_history)
 
-
     def optimize(self, mini_batch, policy_dqn, target_dqn):
         # Unpack mini-batch
         states, actions, new_states, rewards, terminations = zip(*mini_batch)
+
+        # Move all tensors to the appropriate device
+        device = next(policy_dqn.parameters()).device  # automatically get model's device
+
         states = torch.stack(states).to(device)
         actions = torch.stack(actions).to(device)
         new_states = torch.stack(new_states).to(device)
         rewards = torch.stack(rewards).to(device)
-        terminations = torch.tensor(terminations).float().to(device)
+        terminations = torch.tensor(terminations, dtype=torch.float32).to(device)
 
         # Compute target Q-values
         with torch.no_grad():
             if self.enable_double_dqn:
                 best_action_from_policy = policy_dqn(new_states).argmax(dim=1)
                 target_q = rewards + (1 - terminations) * self.discount_factor_g * \
-                                target_dqn(new_states).gather(dim=1, index=best_action_from_policy.unsqueeze(dim=1)).squeeze()
+                           target_dqn(new_states).gather(dim=1,
+                                                         index=best_action_from_policy.unsqueeze(dim=1)).squeeze()
             else:
-                target_q = rewards + (1 - terminations) * self.discount_factor_g * target_dqn(new_states).max(dim=1)[0]
+                target_q = rewards + (1 - terminations) * self.discount_factor_g * \
+                           target_dqn(new_states).max(dim=1)[0]
+
         # Compute current Q-values
         current_q = policy_dqn(states).gather(dim=1, index=actions.unsqueeze(1)).squeeze()
+
         # Compute loss
         loss = self.loss_fn(current_q, target_q)
         self.optimizer.zero_grad()
@@ -257,35 +265,61 @@ class DQN_agent_donkey():
         print(f"\nVideos saved in: {video_dir}")
 
     def evaluateProcess(self, env, episodes):
+        import random
 
+        print("Running random actions test to check environment rendering and progression...\n")
         obs, _ = env.reset()
-        num_states = len(obs)
+        done = False
+        total_reward = 0
+        step_count = 0
+        while not done:
+            action = env.action_space.sample()
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            total_reward += reward
+            step_count += 1
+            print(f"Step {step_count}: Random action {action}, Reward: {reward}, Done: {done}")
+            time.sleep(1 / 30)  # Slow down for visibility
+        #print(f"Random action episode finished with total reward: {total_reward}\n")
+
+        # Now run your DQN evaluation
+        obs, _ = env.reset()
+        if isinstance(obs, np.ndarray):
+            num_states = obs.size
+        else:
+            num_states = obs.numel()
         num_actions = env.action_space.n
+
         # Load trained model
-        policy_dqn = DQN_donkey(num_actions).to(device)
+        policy_dqn = DQN_donkey(num_states, num_actions).to(device)
         policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
         policy_dqn.eval()
-        for episode in range(episodes):
+
+        for episode in range(1, episodes):  # Already did 1 random episode
             obs, _ = env.reset()
-            print(f"Episode {episode + 1} reset, initial obs shape: {obs.shape if hasattr(obs, 'shape') else 'unknown'}")
+            print(f"\n--- Starting Evaluation Episode {episode} ---")
             done = False
             total_reward = 0
-            print(f"\n--- Starting Evaluation Episode {episode + 1} ---")
-
+            step_count = 0
             while not done:
                 state = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
                 with torch.no_grad():
-                    action = policy_dqn(state).argmax(dim=1).item()
+                    q_values = policy_dqn(state)
+                    action = q_values.argmax(dim=1).item()
 
                 obs, reward, terminated, truncated, info = env.step(action)
                 total_reward += reward
                 if "score" in info:
                     score = info["score"]
                 done = terminated or truncated
+                step_count += 1
 
-                time.sleep(1 / 200)  # Limit to ~200 FPS
+                #print(
+                   # f"Step {step_count}: Q-values: {q_values.cpu().numpy()}, chosen action: {action}, Reward: {reward}, Done: {done}")
+                time.sleep(1 / 30)  # Slow down so we can see rendering
 
-            print(f"Episode {episode + 1} finished with reward: {total_reward} Score: {score}")
+            score = info.get("score", None)
+            print(f"Episode {episode} finished with total reward: {total_reward}, Score: {score}")
 
 
 if __name__ == '__main__':

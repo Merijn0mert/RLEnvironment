@@ -36,16 +36,25 @@ class ReplayMemory:
 
         joblib.dump(cpu_memory, path, compress=6)
 
-    def load_all(self, path, device='cpu'):
-        """Load memory from disk and move tensors to the target device."""
+    def load_all(self, path, max_samples=None):
+        """Load memory from disk and keep tensors on CPU."""
         raw_memory = joblib.load(path)
+
+        if max_samples is not None:
+            raw_memory = raw_memory[:max_samples]
+
         self.memory = deque([], maxlen=len(raw_memory))
+
         for state, action, reward, next_state, done in raw_memory:
-            if isinstance(state, torch.Tensor): state = state.to(device)
-            if isinstance(action, torch.Tensor): action = action.to(device)
-            if isinstance(reward, torch.Tensor): reward = reward.to(device)
-            if isinstance(next_state, torch.Tensor): next_state = next_state.to(device)
-            if isinstance(done, torch.Tensor): done = done.to(device)
+            # Ensure all tensors remain on CPU
+            if isinstance(state, torch.Tensor): state = state.cpu()
+            if isinstance(action, torch.Tensor): action = action.cpu()
+            if isinstance(reward, torch.Tensor): reward = reward.cpu()
+            if isinstance(next_state, torch.Tensor): next_state = next_state.cpu()
+            if isinstance(done, torch.Tensor): done = done.cpu()
+
             self.memory.append((state, action, reward, next_state, done))
+
+
 
 

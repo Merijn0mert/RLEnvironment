@@ -4,35 +4,44 @@ import torch.nn.functional as F
 
 
 class DQN_donkey(nn.Module):
-    def __init__(self, action_dim):
+    def __init__(self, state_dim, action_dim, hidden_dim=256, enable_dueling=True):
         super(DQN_donkey, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=8, stride=4)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        self.enable_dueling = enable_dueling
 
-        # Automatically compute flatten size
-        with torch.no_grad():
-            dummy_input = torch.zeros(1, 3, 210, 160)  # Actual Atari frame size
-            out = self.conv3(self.conv2(self.conv1(dummy_input)))
-            self.flattened_size = out.view(1, -1).shape[1]
+        self.fc1 = nn.Linear(state_dim, hidden_dim)
 
-        self.fc1 = nn.Linear(self.flattened_size, 512)
-        self.fc2 = nn.Linear(512, action_dim)
+        if self.enable_dueling:
+            self.fc_value = nn.Linear(hidden_dim, 256)
+            self.value = nn.Linear(256, 1)
+
+            self.fc_advantages = nn.Linear(hidden_dim, 256)
+            self.advantages = nn.Linear(256, action_dim)
+        else:
+            self.output = nn.Linear(hidden_dim, action_dim)
 
     def forward(self, x):
-
-        if x.ndim == 4 and x.shape[-1] == 3:
-            x = x.permute(0, 3, 1, 2)  # NHWC → NCHW
-
-
-        x = x / 255.0
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-
-
-        x = x.reshape(x.size(0), -1)
-
+        x = x.view(x.size(0), -1)  # flatten input for linear layer
         x = F.relu(self.fc1(x))
-        return self.fc2(x)
 
+        if self.enable_dueling:
+            v = F.relu(self.fc_value(x))
+            V = self.value(v)
+
+            a = F.relu(self.fc_advantages(x))
+            A = self.advantages(a)
+
+            Q = V + A - A.mean(dim=1, keepdim=True)
+        else:
+            Q = self.output(x)
+
+        return Q
+
+
+if __name__ == '__main__':
+    state_dim = 12
+    action_dim = 6
+    net = DQN_donkey(state_dim, action_dim)
+
+    dummy_state = torch.randn(1, state_dim)
+    output = net(dummy_state)
+    print(output.shape)  # torch.Size([1, 6])

@@ -40,7 +40,7 @@ donkeykong1:
   epsilon_decay: 0.999
   epsilon_min: 0.05 #5% chance that agent takes random action
   stop_on_reward: 100000
-  fc1_nodes: 512
+  fc1_nodes: 256
   env_make_params:
     #use_pixels: false  # or whatever disables image obs
   enable_double_dqn: True

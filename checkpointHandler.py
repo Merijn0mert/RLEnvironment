@@ -57,10 +57,14 @@ class checkpointer:
             self.optimizer = torch.optim.Adam(policy_dqn.parameters(), lr=self.learning_rate_a)
 
         else:
+            print(f"Loading checkpoint from: {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path, weights_only=False)
+            print(checkpoint.keys())
 
             if os.path.exists(replay_memory_path):
-                memory.load_all(replay_memory_path, device=device)
+                memory.load_all(replay_memory_path, max_samples=50000)
+
+
 
                 print(f"[INFO] Loaded replay memory from {replay_memory_path}")
             else:
@@ -77,23 +81,6 @@ class checkpointer:
                 policy_dqn, replay_memory_path, rewards_per_episode,
                 start_episode, step_counter, target_dqn, self.optimizer)
 
-    def dqnVariables(self, checkpoint, continue_training):
-        if continue_training:
-            epsilon = checkpoint["epsilon"]
-            start_episode = checkpoint["episode"]
-            rewards_per_episode = checkpoint["rewards_per_episode"]
-            epsilon_history = checkpoint["epsilon_history"]
-            best_reward = checkpoint["best_reward"]
-            step_counter = checkpoint["step_counter"]
-            return best_reward, epsilon, epsilon_history, rewards_per_episode, start_episode, step_counter
-        else:
-            start_episode = 0
-            epsilon = self.epsilon_init
-            epsilon_history = []
-            rewards_per_episode = []
-            step_counter = 0
-            best_reward = -9999999
-            return best_reward, epsilon, epsilon_history, rewards_per_episode, start_episode, step_counter
 
     def saveCheckpoint(self, best_reward, checkpoint_path, episode, epsilon, epsilon_history, memory, policy_dqn,
                        replay_memory_path, rewards_per_episode, step_counter, target_dqn):
@@ -115,3 +102,21 @@ class checkpointer:
             "step_counter": step_counter,
         }, checkpoint_path)
         print(f"Checkpoint saved at time :{datetime.datetime.now()} and episode: {episode}. Exiting gracefully.")
+
+    def dqnVariables(self, checkpoint, continue_training):
+        if continue_training:
+            epsilon = checkpoint["epsilon"]
+            start_episode = checkpoint["episode"]
+            rewards_per_episode = checkpoint["rewards_per_episode"]
+            epsilon_history = checkpoint["epsilon_history"]
+            best_reward = checkpoint["best_reward"]
+            step_counter = checkpoint["step_counter"]
+            return best_reward, epsilon, epsilon_history, rewards_per_episode, start_episode, step_counter
+        else:
+            start_episode = 0
+            epsilon = self.epsilon_init
+            epsilon_history = []
+            rewards_per_episode = []
+            step_counter = 0
+            best_reward = -9999999
+            return best_reward, epsilon, epsilon_history, rewards_per_episode, start_episode, step_counter
