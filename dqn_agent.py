@@ -14,7 +14,7 @@ import flappy_bird_gymnasium
 import matplotlib
 import checkpointHandler
 import dataVisuals
-matplotlib.use('Agg')  # Use non-interactive backend for matplotlib
+matplotlib.use('TkAgg')  # Use non-interactive backend for matplotlib
 from matplotlib import pyplot as plt
 from networkx.generators.random_graphs import newman_watts_strogatz_graph
 from rich.markup import render
@@ -80,6 +80,8 @@ class DQN_agent():
         self.MODEL_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.pt')
         self.GRAPH_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameter_set}.png')
         self.checkpoint_path = os.path.join(RUNS_DIR, f"{self.hyperparameter_set}_checkpoint.pth")
+        self._grad_layer_fig = None
+        self._grad_layer_ax = None
 
     def run(self, is_training=True, render=False, continue_training=False):
 
@@ -120,7 +122,7 @@ class DQN_agent():
                 while not all(dones):
                     if is_training and len(memory) > self.mini_batch_size:
                         mini_batch = memory.sample(self.mini_batch_size)
-                        self.optimize(mini_batch, policy_dqn, target_dqn)
+                        self.optimize(mini_batch, policy_dqn, target_dqn, episode)
                         if step_counter > self.network_sync_rate:
                             target_dqn.load_state_dict(policy_dqn.state_dict())
                             step_counter = 0
@@ -198,14 +200,18 @@ class DQN_agent():
             dv.save_graph(rewards_per_episode, epsilon_history)
 
 
-    def optimize(self, mini_batch, policy_dqn, target_dqn):
+    def optimize(self, mini_batch, policy_dqn, target_dqn, episode):
         # Unpack mini-batch
+        dv = dataVisuals.DataVisuals(self.hyperparameter_set)
+        device = next(policy_dqn.parameters()).device
+
         states, actions, new_states, rewards, terminations = zip(*mini_batch)
         states = torch.stack(states).to(device)
         actions = torch.stack(actions).to(device)
         new_states = torch.stack(new_states).to(device)
         rewards = torch.stack(rewards).to(device)
-        terminations = torch.tensor(terminations).float().to(device)
+        terminations = torch.tensor([bool(t) for t in terminations], dtype=torch.float32).to(device)
+
 
         # Compute target Q-values
         with torch.no_grad():
@@ -221,6 +227,16 @@ class DQN_agent():
         loss = self.loss_fn(current_q, target_q)
         self.optimizer.zero_grad()
         loss.backward()
+      #  if self._grad_layer_fig is None or self._grad_layer_ax is None:
+           # self._grad_layer_fig, self._grad_layer_ax = dv.plot_dqn_connections(policy_dqn, mode='grads')
+       # else:
+            # Clear axes and re-plot on the existing axes
+            #self._grad_layer_ax.clear()
+            # You'll need to modify plot_dqn_connections to accept axes and plot on them:
+            #self._grad_layer_fig, self._grad_layer_ax = dv.plot_dqn_connections(policy_dqn, mode='grads')
+
+
+
         self.optimizer.step()
 
     def evaluate(self, episodes=11):

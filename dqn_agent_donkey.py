@@ -87,13 +87,13 @@ class DQN_agent_donkey():
 
     def run(self, is_training=True, render=False, continue_training=False):
 
-        NUM_ENVS = 2  # Number of parallel environments
+        NUM_ENVS = 1  # Number of parallel environments
         dv = dataVisuals.DataVisuals(self.hyperparameter_set)
         cp = checkpointHandler.checkpointer(self.hyperparameter_set)
 
         def make_env():
             def _init():
-                return gymnasium.make(self.env_id)
+                return gymnasium.make(self.env_id, render_mode='human')
 
                 # **self.env_make_params
                 #gymnasium.make("FlappyBird-v0", render_mode=None, use_lidar=False)
@@ -257,7 +257,7 @@ class DQN_agent_donkey():
         video_dir = os.path.join("videos", self.hyperparameter_set)
         Path(video_dir).mkdir(parents=True, exist_ok=True)
         # Create a single environment with rendering
-        base_env = gymnasium.make(self.env_id, render_mode="rgb_array", **self.env_make_params)
+        base_env = gymnasium.make(self.env_id, render_mode="rgb_array")
         env_with_score = ScoreOverlayWrapper(base_env)
         env = RecordVideo(env_with_score, video_folder=video_dir, episode_trigger=lambda episode_id: True, name_prefix=f"{self.hyperparameter_set}_eval")
         self.evaluateProcess(env, episodes)
@@ -267,7 +267,6 @@ class DQN_agent_donkey():
     def evaluateProcess(self, env, episodes):
         import random
 
-        print("Running random actions test to check environment rendering and progression...\n")
         obs, _ = env.reset()
         done = False
         total_reward = 0
@@ -278,7 +277,6 @@ class DQN_agent_donkey():
             done = terminated or truncated
             total_reward += reward
             step_count += 1
-            print(f"Step {step_count}: Random action {action}, Reward: {reward}, Done: {done}")
             time.sleep(1 / 30)  # Slow down for visibility
         #print(f"Random action episode finished with total reward: {total_reward}\n")
 

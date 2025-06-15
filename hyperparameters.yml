@@ -37,7 +37,7 @@ donkeykong1:
   replay_memory_size: 50000
   mini_batch_size: 16
   epsilon_init: 1 #100% random change decreasing to epsilon_min
-  epsilon_decay: 0.999
+  epsilon_decay: 0.99
   epsilon_min: 0.05 #5% chance that agent takes random action
   stop_on_reward: 100000
   fc1_nodes: 256
